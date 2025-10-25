@@ -5,7 +5,7 @@ pub enum StructureError {
     UnmatchedOpen(usize),          // '(' at this position was never closed
     UnmatchedMultiOpen((usize, usize)),          // '(' at this position was never closed
     UnmatchedClose(usize),         // ')' at this position has no matching '('
-    UnmatchedMultiClose((usize, usize)),          // '(' at this position was never closed
+    UnmatchedMultiClose((usize, usize)),          // ')' at has no matching '('
     InvalidToken(String, String, usize),   // invalid char and position
     InvalidPairTable(usize),   // invalid char and position
 }
