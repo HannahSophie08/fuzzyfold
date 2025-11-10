@@ -24,6 +24,9 @@ rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+bincode = "1.3"           # for compact binary serialization
+anyhow = "1.0.100"
+
 [[bench]]
 name = "stochastic_simulation"
 harness = false

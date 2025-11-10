@@ -1,3 +1,4 @@
+use serde::{Serialize, Deserialize};
 use std::fmt;
 use std::ops::Deref;
 use std::ops::DerefMut;
@@ -7,7 +8,7 @@ use crate::PairTable;
 use crate::MultiPairTable;
 use crate::StructureError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DotBracket {
     Unpaired, // '.'
     Open,     // '('
@@ -43,7 +44,7 @@ impl From<DotBracket> for char {
 /// DotBracketVec is a compact representation of secondary structure. Note that
 /// the field is public, to allow unsafe modifications. Thus, DotBracketVecs can
 /// be malformed and should be converted using the TryFrom trait.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DotBracketVec(pub Vec<DotBracket>);
 
 impl Deref for DotBracketVec {

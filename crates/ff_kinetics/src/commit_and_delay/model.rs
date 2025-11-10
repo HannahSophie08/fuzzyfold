@@ -1,10 +1,14 @@
+use serde::{Serialize, Deserialize};
 use std::sync::Arc;
+use std::path::Path;
 use std::convert::TryFrom;
 use rand::rng;
 use ndarray::Array2;
+use ndarray::s;
 use ff_structure::PairTable;
 use ff_structure::DotBracketVec;
 use ff_energy::EnergyModel;
+
 
 use crate::RateModel;
 use crate::LoopStructure;
@@ -13,16 +17,16 @@ use crate::commit_and_delay::ExitMacrostateRegistry;
 
 type MacrostateID = usize;
 
-#[derive(Debug, Clone)]
-struct ReactiveMicroTrajectory {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReactiveMicroTrajectory {
     i: DotBracketVec,
     j: DotBracketVec,
     simu_time: f64,
     mean_time: f64,
 }
 
-#[derive(Debug, Clone)]
-struct ReactiveTrajectoryEnsemble {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReactiveTrajectoryEnsemble {
     start: MacrostateID,
     stop: MacrostateID,
     t_min: Option<f64>,
@@ -34,28 +38,133 @@ impl ReactiveTrajectoryEnsemble {
     pub fn sort_trajectories(&mut self) {
         self.successes.sort_by(|a, b| a.simu_time.partial_cmp(&b.simu_time).unwrap());
     }
-    
+
     pub fn split_ensemble(&self, num_splits: usize) -> Vec<Self> {
-        if self.successes.is_empty() {
+        if self.successes.is_empty() || num_splits == 0 {
             return vec![];
         }
 
-        //TODO: test with num_splits = 0
-        let chunk_size = self.successes.len().div_ceil(num_splits);
-        self.successes
-            .chunks(chunk_size)
-            .map(|chunk| Self {
-                start: self.start,
-                stop: self.stop,
-                t_min: chunk.first().map(|t| t.simu_time),
-                t_max: chunk.last().map(|t| t.simu_time),
-                successes: chunk.to_vec(),
-            })
-            .collect()
+        let eps = 1.000001;
+
+        // compute min/max simu_time
+        let mint = self
+            .successes
+            .iter()
+            .map(|t| t.mean_time)
+            .fold(f64::INFINITY, f64::min);
+        let maxt = self
+            .successes
+            .iter()
+            .map(|t| t.mean_time)
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        if mint <= 0.0 || maxt <= 0.0 {
+            eprintln!("Warning: non-positive times found, cannot use log spacing.");
+            return vec![self.clone()];
+        }
+
+        // logarithmic bin edges
+        let log_min = (mint / eps).ln();
+        let log_max = (maxt * eps).ln();
+        let step = (log_max - log_min) / (num_splits + 1) as f64;
+
+        let mut ensembles = Vec::with_capacity(num_splits + 1);
+        for k in 0..=num_splits {
+            let t_low = (log_min + k as f64 * step).exp();
+            let t_high = (log_min + (k + 1) as f64 * step).exp();
+
+            let chunk: Vec<_> = self
+                .successes
+                .iter()
+                .cloned()
+                .filter(|traj| traj.simu_time >= t_low && traj.simu_time < t_high)
+                .collect();
+
+            if !chunk.is_empty() {
+                let t_min = chunk.iter().map(|t| t.simu_time).fold(f64::INFINITY, f64::min);
+                let t_max = chunk.iter().map(|t| t.simu_time).fold(f64::NEG_INFINITY, f64::max);
+
+                ensembles.push(Self {
+                    start: self.start,
+                    stop: self.stop,
+                    t_min: Some(t_min),
+                    t_max: Some(t_max),
+                    successes: chunk,
+                });
+            }
+        }
+
+        ensembles
     }
+
+    //pub fn split_ensemble(&self, num_splits: usize) -> Vec<Self> {
+    //    if self.successes.is_empty() {
+    //        return vec![];
+    //    }
+
+    //    //TODO: test with num_splits = 0
+    //    let chunk_size = self.successes.len().div_ceil(num_splits);
+    //    self.successes
+    //        .chunks(chunk_size)
+    //        .map(|chunk| Self {
+    //            start: self.start,
+    //            stop: self.stop,
+    //            t_min: chunk.first().map(|t| t.simu_time),
+    //            t_max: chunk.last().map(|t| t.simu_time),
+    //            successes: chunk.to_vec(),
+    //        })
+    //        .collect()
+    //}
 
     pub fn len(&self) -> usize {
         self.successes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.successes.is_empty()
+    }
+
+    pub fn mean_time_stats(&self) -> Option<(f64, f64, f64)> {
+        if self.successes.is_empty() {
+            return None;
+        }
+
+        let mut min_t = f64::INFINITY;
+        let mut max_t = f64::NEG_INFINITY;
+        let mut sum_t = 0.0;
+
+        for traj in &self.successes {
+            let t = traj.mean_time;
+            if t < min_t {
+                min_t = t;
+            }
+            if t > max_t {
+                max_t = t;
+            }
+            sum_t += t;
+        }
+
+        let mean_t = sum_t / self.successes.len() as f64;
+        Some((min_t, max_t, mean_t))
+    }
+
+}
+
+impl<'a, E: EnergyModel, R: RateModel> CommitAndDelay<'a, E, R> {
+    pub fn merge(&mut self, other: Self) {
+        for ((i, j), val) in other.trajectories.indexed_iter() {
+            if let Some(ens) = val {
+                if let Some(ref mut existing) = self.trajectories[(i, j)] {
+                    existing.successes.extend_from_slice(&ens.successes);
+                } else {
+                    self.trajectories[(i, j)] = Some(ens.clone());
+                }
+            }
+        }
+        
+
+        // recompute marginals for self
+        self.recompute_marginals();
     }
 }
 
@@ -77,6 +186,58 @@ for CommitAndDelay<'a, E, R> {
 }
 
 impl<'a, E: EnergyModel, R: RateModel> CommitAndDelay<'a, E, R> {
+    /// recompute (0, j) and (i, 0) marginals
+    pub fn recompute_marginals(&mut self) {
+        let nrows = self.trajectories.nrows();
+        let ncols = self.trajectories.ncols();
+
+        // reset marginals
+        for i in 0..nrows {
+            self.trajectories[(i, 0)] = None;
+        }
+        for j in 0..ncols {
+            self.trajectories[(0, j)] = None;
+        }
+
+        // sum outflows per row
+        for i in 1..nrows {
+            let mut merged = ReactiveTrajectoryEnsemble {
+                start: i,
+                stop: 0,
+                t_min: None,
+                t_max: None,
+                successes: Vec::new(),
+            };
+            for j in 1..ncols {
+                if let Some(ref ens) = self.trajectories[(i, j)] {
+                    merged.successes.extend_from_slice(&ens.successes);
+                }
+            }
+            if !merged.successes.is_empty() {
+                self.trajectories[(i, 0)] = Some(merged);
+            }
+        }
+
+        // sum inflows per column
+        for j in 1..ncols {
+            let mut merged = ReactiveTrajectoryEnsemble {
+                start: 0,
+                stop: j,
+                t_min: None,
+                t_max: None,
+                successes: Vec::new(),
+            };
+            for i in 1..nrows {
+                if let Some(ref ens) = self.trajectories[(i, j)] {
+                    merged.successes.extend_from_slice(&ens.successes);
+                }
+            }
+            if !merged.successes.is_empty() {
+                self.trajectories[(0, j)] = Some(merged);
+            }
+        }
+    }
+
 
     pub fn simulate_from(&mut self, start_id: MacrostateID) {
         let sequence = self.exit_registry.parent_registry().sequence();
@@ -107,6 +268,35 @@ impl<'a, E: EnergyModel, R: RateModel> CommitAndDelay<'a, E, R> {
                         simu_time: t,
                         mean_time,
                     };
+
+                    //Marginal
+                    self.trajectories
+                        .get_mut((start_id, 0))
+                        .unwrap()
+                        .get_or_insert_with(|| ReactiveTrajectoryEnsemble {
+                            start: start_id,
+                            stop: stop_id,
+                            t_min: None,
+                            t_max: None,
+                            successes: Vec::new(),
+                        })
+                        .successes
+                        .push(traj.clone());
+
+                    //Marginal
+                    self.trajectories
+                        .get_mut((0, stop_id))
+                        .unwrap()
+                        .get_or_insert_with(|| ReactiveTrajectoryEnsemble {
+                            start: start_id,
+                            stop: stop_id,
+                            t_min: None,
+                            t_max: None,
+                            successes: Vec::new(),
+                        })
+                        .successes
+                        .push(traj.clone());
+
                     self.trajectories
                         .get_mut((start_id, stop_id))
                         .unwrap()
@@ -189,13 +379,91 @@ impl<'a, E: EnergyModel, R: RateModel> CommitAndDelay<'a, E, R> {
         );
     }
 
-    pub fn gather_data(&mut self) {
-        // let's make an executable. 
+    pub fn gather_data(&self) {
+        let split = 0;
+        let mut total = 0;
+        for ((i, j), value) in self.trajectories.indexed_iter() {
+            if i == 0 {
+                continue;
+            } 
+            if j == 0 {
+                total = value.as_ref().unwrap().len();
+                continue;
+            }
+            if let Some(ens) = value {
+                let k_alpha = self.exit_registry.exit_macrostates()[i].k_alpha();
+                for (sid, sms) in ens.split_ensemble(split).iter().enumerate().map(|(i, x)| (i + 1, x)) {
+                    println!("M_{i} -> S{sid}_[{i},{j}] @ {:14.8e} /s", k_alpha * sms.len() as f64 / total as f64);
+                    println!("S{sid}_[{i},{j}] -> M_{j} @ {:14.8e} /s", 1f64/sms.mean_time_stats().unwrap().2);
+
+                }
+                println!("M_{i} -> T_[{i},{j}] @ {:14.8e} /s", k_alpha * ens.len() as f64 / total as f64);
+                println!("T_[{i},{j}] -> M_{j} @ {:14.8e} /s", 1f64/ens.mean_time_stats().unwrap().2);
+            } else {
+                println!("M_{i} -> M_{j} @ 0");
+            }
+        }
     }
 
     pub fn to_rate_matrix(&self) -> Array2<f64> {
         todo!("let's do only k_commit for now")
     }
+
+    pub fn trajectories(&self) -> &Array2<Option<ReactiveTrajectoryEnsemble>> {
+        &self.trajectories
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SerializableCommitAndDelay {
+    trajectories: Array2<Option<ReactiveTrajectoryEnsemble>>,
+}
+
+impl<'a, E: EnergyModel, R: RateModel> CommitAndDelay<'a, E, R> {
+    pub fn to_serializable(&self) -> SerializableCommitAndDelay {
+        let view = self.trajectories.slice(s![1.., 1..]);
+        SerializableCommitAndDelay {
+            trajectories: view.to_owned(),
+        }
+    }
+
+    pub fn from_serializable(
+        serial: SerializableCommitAndDelay,
+        exit_registry: Arc<ExitMacrostateRegistry<'a, E, R>>,
+    ) -> Self {
+        let nrows = serial.trajectories.nrows() + 1;
+        let ncols = serial.trajectories.ncols() + 1;
+
+        // Allocate full array (including margins)
+        let mut full = Array2::from_elem((nrows, ncols), None);
+
+        // Copy serialized values into the sub-matrix (1.., 1..)
+        full.slice_mut(s![1.., 1..]).assign(&serial.trajectories);
+        
+
+        // Leave row/col 0 empty or recompute marginals later
+        Self {
+            exit_registry,
+            trajectories: full,
+        }
+    }
+    pub fn save_json(&self, path: &str) -> anyhow::Result<()> {
+        let serial = self.to_serializable();
+        serde_json::to_writer_pretty(std::fs::File::create(path)?, &serial)?;
+        Ok(())
+    }
+
+    pub fn load_json<P: AsRef<Path>>(
+        path: P,
+        exit_registry: Arc<ExitMacrostateRegistry<'a, E, R>>,
+    ) -> anyhow::Result<Self> {
+        let reader = std::io::BufReader::new(std::fs::File::open(path.as_ref())?);
+        let serial: SerializableCommitAndDelay = serde_json::from_reader(reader)?;
+
+        Ok(Self::from_serializable(serial, exit_registry))
+    }
+
+    
 }
 
 #[cfg(test)]
@@ -280,7 +548,6 @@ mod tests {
         registry.insert_from_reader(test_ms1(), "manual").unwrap();
         assert_eq!(registry.len(), 2);
 
-       assert_eq!(registry.len(), 2);
         let rate_model = Metropolis::new(energy_model.temperature(), 1.0);
         let exitreg = ExitMacrostateRegistry::from((&registry, &rate_model));
 
