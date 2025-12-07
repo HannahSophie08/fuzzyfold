@@ -6,7 +6,7 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::path::Path;
 
-use crate::parameters::TURNER_2004;
+use crate::parameters::RNA_TURNER_2004;
 use crate::NearestNeighborLoop;
 use crate::LoopDecomposition;
 use crate::Base;
@@ -32,7 +32,7 @@ pub struct ViennaRNA {
 
 impl Default for ViennaRNA {
     fn default() -> Self {
-        ViennaRNA::from_parameter_str(TURNER_2004)
+        ViennaRNA::from_parameter_str(RNA_TURNER_2004)
             .expect("Built-in Turner 2004 parameter file must be valid")
     }
 }
@@ -141,16 +141,11 @@ impl ViennaRNA {
                 [revseq[1] as usize][fwdseq[1] as usize]
                 [fwdseq[2] as usize].expect("from file"),
             (4, 4) => 
-                // TODO: what to do if N comes up?
-                if is_ru_end(outer) || is_ru_end(inner) {
-                    900 // ouch
-                } else {
-                    self.energy_tables.int22
-                    [outer as usize][inner as usize]
-                    [fwdseq[1] as usize][fwdseq[2] as usize]
-                    [revseq[1] as usize][revseq[2] as usize]
-                    .expect("from file")
-                },
+                self.energy_tables.int22
+                [outer as usize][inner as usize]
+                [fwdseq[1] as usize][fwdseq[2] as usize]
+                [revseq[1] as usize][revseq[2] as usize]
+                .expect("from file"),
             (l, 2) | (2, l) => { // General Bulge case
                 let n = l - 2;
                 let pg1 = if !is_ru_end(outer) { 0 } else {
@@ -230,6 +225,7 @@ impl ViennaRNA {
         // For warning purposes only.
         let _ = PairTypeRNA::new((segments[0][0], *segments.last().unwrap().last().unwrap()));
 
+        // Number of stems in the multiloop.
         let n = segments.len(); 
 
         let mut en = 0;
@@ -251,16 +247,18 @@ impl ViennaRNA {
                     [pair as usize][b5 as usize][b3 as usize].unwrap(),
                 (Some(&b5), None) => 
                     self.energy_tables.dangle5
-                     [pair as usize][b5 as usize].unwrap(),
+                     [pair as usize][b5 as usize].unwrap().min(0),
                 (None, Some(&b3)) => 
                     self.energy_tables.dangle3
-                    [pair as usize][b3 as usize].unwrap(),
+                    [pair as usize][b3 as usize].unwrap().min(0),
                 _ => 0,
             };
             en += den;
         }
  
-        en + self.energy_tables.ml_params.base_en37 
+        // Number of unpaired bases in the multiloop.
+        let m: usize = segments.iter().map(|s| s.len() - 2).sum();
+        en + self.energy_tables.ml_params.base_en37 * m as i32
            + self.energy_tables.ml_params.closing_en37
            + self.energy_tables.ml_params.intern_en37 * n as i32
     }
@@ -292,10 +290,10 @@ impl ViennaRNA {
                     [pair as usize][b5 as usize][b3 as usize].unwrap(),
                 (Some(&b5), None) => 
                     self.energy_tables.dangle5
-                    [pair as usize][b5 as usize].unwrap(),
+                    [pair as usize][b5 as usize].unwrap().min(0),
                 (None, Some(&b3)) => 
                      self.energy_tables.dangle3
-                    [pair as usize][b3 as usize].unwrap(),
+                    [pair as usize][b3 as usize].unwrap().min(0),
                 _ => 0,
             };
             en += den;
