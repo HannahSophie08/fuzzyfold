@@ -33,6 +33,10 @@ path = "src/bin/ff-trajectory.rs"
 name = "ff-cotranscriptional_folding"
 path = "src/bin/ff-cotranscriptional_folding.rs"
 
+[[bin]]
+name = "ff-timecourse_cotranscriptional_folding"
+path = "src/bin/ff-timecourse_cotranscriptional_folding.rs"
+
 [dependencies]
 ff_structure.workspace = true
 ff_energy.workspace = true
