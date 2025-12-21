@@ -22,7 +22,7 @@ impl<'a, M: EnergyModel> LoopCache<'a, M> {
 
     pub fn new(sequence: &'a [Base], model: &'a M) -> Self {
         Self { 
-            sequence,
+            sequence: sequence,
             model,
             loop_list: IntMap::default(),
             l_indices: IntSet::default(),
@@ -80,6 +80,7 @@ impl<'a, M: EnergyModel> LoopCache<'a, M> {
         let delta = (outer_energy + inner_energy) - c_energy;
         (outer_index, inner_index, -delta)
     }
+
 
     fn get_loop_neighbors(&self, index: usize) -> MoveEnergies {
         let (combo, energy) = self.loop_list.get(&index).expect("where's the loop?");
@@ -298,6 +299,51 @@ impl<'a, M: EnergyModel> LoopStructure<'a, M> {
         ((o_id, new_outer_add_neighbors),
          (i_id, new_inner_add_neighbors),
         pair_changes)
+    }
+
+
+    pub fn apply_ext_move(&mut self, new_sequence: &'a[Base]) -> Result<(), String> {
+
+        //---Identify exterior loop index--
+        let exterior_loop_idx = self.registry.loop_list
+            .iter()
+            .find_map(|(idx, (loop_struct, _)) | {
+                if matches!(loop_struct, NearestNeighborLoop::Exterior { .. }) {
+                    Some(*idx)
+                } else {
+                    None
+                }
+        })
+        .ok_or_else(|| "No exterior loop found".to_string())?;
+
+
+        let position = (self.registry.sequence.len() - 1) as NAIDX; //position of new nucleotide
+
+        let(exterior_loop, energy) = self.registry.loop_list //current exterior loop and energy
+            .get(&exterior_loop_idx)
+            .ok_or("Missing exteriror loop")?
+            .clone();
+
+        self.registry.sequence = new_sequence; //update sequence 
+        
+        self.loop_lookup.insert(position, exterior_loop_idx); //map new nucleotide position to exterior loop
+
+        let new_energy = self.registry.model.energy_of_loop ( //calculate new energy of exterior loop
+            new_sequence,
+            &exterior_loop
+        );
+
+        self.registry.loop_list.insert( //update loop list 
+            exterior_loop_idx,
+            (exterior_loop, new_energy)
+        );
+
+        let new_neighbors = self.registry.get_loop_neighbors(exterior_loop_idx); //recompute neighbors for exterior loop
+
+        self.loop_neighbors.insert(exterior_loop_idx, new_neighbors.clone());
+
+        Ok(())
+
     }
 
 }
