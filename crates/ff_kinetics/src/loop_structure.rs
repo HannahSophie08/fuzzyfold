@@ -1,4 +1,5 @@
 use std::fmt;
+use ff_energy::NucleotideVec;
 use nohash_hasher::IntMap;
 use nohash_hasher::IntSet;
 use crate::reaction::Move;
@@ -304,7 +305,7 @@ impl<'a, M: EnergyModel> LoopStructure<'a, M> {
 
     pub fn apply_ext_move(&mut self, new_sequence: &'a[Base]) -> Result<(), String> {
 
-        //---Identify exterior loop index--
+        //---Identify exterior loop index---
         let exterior_loop_idx = self.registry.loop_list
             .iter()
             .find_map(|(idx, (loop_struct, _)) | {
@@ -317,7 +318,7 @@ impl<'a, M: EnergyModel> LoopStructure<'a, M> {
         .ok_or_else(|| "No exterior loop found".to_string())?;
 
 
-        let position = (self.registry.sequence.len() - 1) as NAIDX; //position of new nucleotide
+        let position = (new_sequence.len() - 1) as NAIDX; //position of new nucleotide
 
         let(exterior_loop, energy) = self.registry.loop_list //current exterior loop and energy
             .get(&exterior_loop_idx)
@@ -469,6 +470,47 @@ mod tests {
         println!("{:?}", neighbors);
         let _ = ls.apply_add_move(1, 6);
         assert_eq!(neighbors, ls.get_del_neighbors());
+    }
+
+    #[test]
+    fn test_appyl_ext_move() {
+        let seq = NucleotideVec::from_lossy("UGCCCCGGUC");
+        let structure = PairTable::try_from(".((....).)").unwrap();
+        let model = ViennaRNA::default();
+
+        let mut ls = LoopStructure::try_from((&seq[..], &structure, &model)).unwrap();
+        let add_neighbors_1: Vec<_> = ls.get_add_neighbors_per_loop()
+            .iter()
+            .flat_map(|(_, neighbors) | neighbors.clone())
+            .collect();
+
+        let energy_1 = ls.energy();
+        println!("Energy before extension: {}", ls.energy());
+        
+        let new_sequence = NucleotideVec::from_lossy("UGCCCCGGUCA");
+        let result = ls.apply_ext_move(&new_sequence[..]);
+        assert!(result.is_ok());
+
+        let energy_2 = ls.energy();
+        let add_neighbors_2: Vec<_> = ls.get_add_neighbors_per_loop()
+            .iter()
+            .flat_map(|(_, neighbors) | neighbors.clone())
+            .collect();
+        println!("Energy after extension:{}", ls.energy());
+        assert_ne!(energy_1, energy_2);
+        assert_ne!(add_neighbors_1, add_neighbors_2);
+
+        let structure_exp = PairTable::try_from(".((....).).").unwrap();
+        let ls_exp = LoopStructure::try_from((&new_sequence[..], &structure_exp, &model)).unwrap();
+        let energy_exp = ls_exp.energy();
+        let add_neighbors_exp: Vec<_> = ls_exp.get_add_neighbors_per_loop()
+            .iter()
+            .flat_map(|(_, neighbors) | neighbors.clone())
+            .collect();
+        println!("Expected energy after extension:{}", energy_exp);
+        assert_eq!(energy_2, energy_exp); //assert if energy after extension matches expected energy 
+        assert_eq!(add_neighbors_2, add_neighbors_exp); //assert if neighbors match exptected neighbors
+
     }
 
 }
