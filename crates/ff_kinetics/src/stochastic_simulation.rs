@@ -3,6 +3,7 @@ use rand::Rng;
 use nohash_hasher::IntMap;
 use ff_structure::NAIDX;
 use ff_energy::EnergyModel;
+use ff_energy::Base;
 
 use crate::reaction::Reaction;
 use crate::LoopStructure;
@@ -323,6 +324,109 @@ impl<'a, M: EnergyModel, K: RateModel> LoopStructureSSA<'a, M, K> {
 
         }
     }
+
+    pub fn co_simulate<R, F>(
+        &mut self,
+        rng: &mut R,
+        t_max: Vec<f64>,
+        sequence: &'a [Base],
+        mut start: usize,
+        mut callback: F,
+    )
+    where
+        R: Rng + ?Sized,
+        F: FnMut(f64, f64, f64, &LoopStructure<'a, M>) -> bool,
+    {
+        let mut t = 0.;
+        let mut c = start; 
+        let mut co_sequence = &sequence[..c];
+
+        for i in t_max {
+            while t < i {
+                if let (Some(pf), Some(lf)) = (self.pair_flux, self.loop_flux) {
+                    if (log_add(pf, lf) - self.log_flux).abs() > 1e-8 {
+                        self.recompute_flux();
+                    }
+                } else { self.recompute_flux(); };
+
+                let flux = self.log_flux.exp();
+                // sample waiting time ~ Exp(flux)
+                let tinc = -rng.random::<f64>().ln() / flux;
+
+                // Callback bewore applying the waiting time.
+                // If callback return's false, then abort the simulation!
+                if !callback(t, tinc, flux, &self.loopstructure) {
+                    break;
+                }
+
+                t += tinc;
+
+                // sample reaction, probably the bottleneck for now
+                let log_thresh = self.log_flux + rng.random::<f64>().ln(); // ln(u) ≤ 0
+                let mut acc = f64::NEG_INFINITY;
+                let mut chosen = None;
+            
+                if let Some(pf) = self.pair_flux {
+                    if pf >= log_thresh {
+                        for rxn in self.pair_rxns.values() {
+                            acc = log_add(acc, rxn.log_rate());
+                            if acc >= log_thresh {
+                                chosen = Some(rxn.clone());
+                                break;
+                            }
+                        }
+                    } else {
+                        acc = pf;
+                    }
+                }
+                if chosen.is_none() {
+                    'outer: for (lli, lflux) in self.per_loop_flux.iter() {
+                        let rxns = &self.per_loop_rxns[lli];
+                        let next_acc = log_add(acc, *lflux);
+                        if next_acc > log_thresh {
+                            for rxn in rxns {
+                                acc = log_add(acc, rxn.log_rate());
+                                if acc >= log_thresh {
+                                    chosen = Some(rxn.clone());
+                                    break 'outer;
+                                }
+                            }
+                        } else {
+                            acc = next_acc;
+                        }
+                }
+            }
+
+            if let Some(rxn) = chosen {
+                match rxn {
+                    Reaction::Add { i, j, .. } => {
+                        self.remove_loop_reaction(rxn.ij().0);
+                        let ((lli, ami), (llj, amj), pair_changes) = self
+                            .loopstructure.apply_add_move(i, j);
+                        self.insert_loop_reactions(lli, ami);
+                        self.insert_loop_reactions(llj, amj);
+                        self.update_pair_reactions(pair_changes);
+                    },
+                    Reaction::Del { i, j, .. } => {
+                        self.remove_pair_reaction(rxn.ij().0);
+                        let ((lli, neighbors), pair_changes) = self
+                            .loopstructure.apply_del_move(i, j);
+                        self.insert_loop_reactions(lli, neighbors);
+                        self.update_pair_reactions(pair_changes);
+                    },
+                }
+            } else {
+                panic!("No reaction chosen despite positive flux");
+            }
+
+        }
+
+        c += 1;
+        co_sequence = &sequence[..c];
+        let _ = self.loopstructure.apply_ext_move(co_sequence);
+
+     }
+    }
 }
 
 #[cfg(test)]
@@ -367,6 +471,58 @@ mod tests {
         assert!(steps > 0, "Simulation must perform at least one step");
         assert!(simulator.log_flux.is_finite(), "Flux must remain finite");
     }
+
+
+    #[test]
+    fn test_cotranscriptional_simulation() {
+        let emodel = ViennaRNA::default();
+        let rmodel = Metropolis::new(emodel.temperature(), 1.0);
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let sequence = "CAAAG";
+        let current_sequence = "C";
+        let structure = ".....";
+        let currenct_structure = ".";
+        let t_max: Vec<f64> = vec![0.001, 0.0001, 0.001, 0.0001, 0.00001, 0.002];
+
+        let sequence = NucleotideVec::try_from(sequence).unwrap();
+        let current_sequence = NucleotideVec::try_from(current_sequence).unwrap();
+        let pairings = PairTable::try_from(currenct_structure)
+            .expect("invalid structure in input");
+        let loops = LoopStructure::try_from((&current_sequence[..], &pairings, &emodel))
+            .expect("failed to build loop structure");
+
+        let mut simulator = LoopStructureSSA::from((loops, &rmodel));
+
+        let mut time_steps = Vec::new();
+        let mut sequence_lengths = Vec::new();
+        
+
+        let mut steps = 0;
+        simulator.co_simulate(
+            &mut rng, t_max, 
+            &sequence, 
+            1, 
+            |t, tinc, flux, ls| {
+                steps += 1;
+                time_steps.push(t);
+                let len = ls.sequence_len();
+                sequence_lengths.push(len);
+                println!(
+                    "Step {}: t={:.4}, Δt={:.4}, flux={:.3e}",
+                    steps, t, tinc, flux
+                );
+                true
+        });
+
+        assert!(steps > 0, "Simulation must perform at least one step");
+        assert!(simulator.log_flux.is_finite(), "Flux must remain finite");
+        println!("Sequence length:");
+        for l in sequence_lengths {
+            println!("{}", l);
+        }
+    }
+
 }
 
 
