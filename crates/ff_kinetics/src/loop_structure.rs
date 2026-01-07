@@ -303,7 +303,7 @@ impl<'a, M: EnergyModel> LoopStructure<'a, M> {
     }
 
 
-    pub fn apply_ext_move(&mut self, new_sequence: &'a[Base]) -> Result<(), String> {
+    pub fn apply_ext_move(&mut self, new_sequence: &'a[Base]) -> Result<(usize, MoveEnergies), String> {
 
         //---Identify exterior loop index---
         let exterior_loop_idx = self.registry.loop_list
@@ -343,8 +343,14 @@ impl<'a, M: EnergyModel> LoopStructure<'a, M> {
 
         self.loop_neighbors.insert(exterior_loop_idx, new_neighbors.clone());
 
-        Ok(())
+        
 
+        Ok((exterior_loop_idx, new_neighbors))
+
+    }
+
+    pub fn sequence_len(&self) -> usize {
+        self.registry.sequence.len()
     }
 
 }
