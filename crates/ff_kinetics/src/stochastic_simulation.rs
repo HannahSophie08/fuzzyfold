@@ -332,9 +332,9 @@ impl<'a, M: EnergyModel, K: RateModel> LoopStructureSSA<'a, M, K> {
     pub fn co_simulate<R, F>(
         &mut self,
         rng: &mut R,
-        t_max: Vec<f64>,
+        t_max: Vec<f64>, 
         sequence: &'a [Base],
-        start: usize,
+        start: usize, //at which sequence length the simulation starts 
         mut callback: F,
     )
     where
@@ -343,12 +343,12 @@ impl<'a, M: EnergyModel, K: RateModel> LoopStructureSSA<'a, M, K> {
     {
         let mut t = 0.;
         let mut c = start; 
-        let mut co_sequence = &sequence[..c];
+        let mut co_sequence = &sequence[..c]; //current sequence 
 
-        for i in t_max {
-            while t < i {
+        for i in t_max { //iterates over time steps in t_max, the extension time for current nucleotide = simulation time 
+            while t < i { 
 
-                if self.log_flux == f64::NEG_INFINITY {
+                if self.log_flux == f64::NEG_INFINITY { // if there are no possible moves, the time is updated and no simulation perfpr,ed
                     t = i; 
                     break;
                 }
@@ -364,7 +364,6 @@ impl<'a, M: EnergyModel, K: RateModel> LoopStructureSSA<'a, M, K> {
                 let tinc = -rng.random::<f64>().ln() / flux;
 
                 // if next reaction takes longer than i, break
-
                 if t + tinc >= i {
                     t = i;
                     break;
@@ -377,7 +376,6 @@ impl<'a, M: EnergyModel, K: RateModel> LoopStructureSSA<'a, M, K> {
                 }
 
                 t += tinc;
-                
                 
 
                 // sample reaction, probably the bottleneck for now
@@ -440,12 +438,12 @@ impl<'a, M: EnergyModel, K: RateModel> LoopStructureSSA<'a, M, K> {
 
         }
 
-        if co_sequence.len() < sequence.len() {
+        if co_sequence.len() < sequence.len() { //apply extension move as long until total sequence length is reached 
 
             c += 1;
-            co_sequence = &sequence[..c];
+            co_sequence = &sequence[..c]; //current sequence
             let Ok((exterior_loop_idx, new_neighbors))  = self.loopstructure.apply_ext_move(co_sequence) else {panic!("Extension failed")};
-            println!("Extended sequence to length {}", co_sequence.len());
+            // println!("Extended sequence to length {}", co_sequence.len());
             
             // Update SSA reactions for exterior loop
             self.per_loop_rxns.remove(&exterior_loop_idx);
@@ -511,6 +509,7 @@ mod tests {
         let current_sequence = "C";
         let currenct_structure = ".";
         let t_max: Vec<f64> = vec![0.01, 0.15, 0.21, 0.31, 0.35, 0.4, 0.5, 0.8, 0.9, 0.95, 1.1, 1.9, 2.6, 3.0, 3.5, 4.0, 6.0, 6.5, 7.0, 7.4, 7.8, 8.2, 8.7, 8.9, 9.0, 9.2, 10.2];
+        let max_t = *t_max.last().unwrap();
 
         let sequence = NucleotideVec::try_from(sequence).unwrap();
         let current_sequence = NucleotideVec::try_from(current_sequence).unwrap();
@@ -542,12 +541,20 @@ mod tests {
                 true
         });
 
-        ///assert!(steps > 0, "Simulation must perform at least one step");
-        ///assert!(simulator.log_flux.is_finite(), "Flux must remain finite");
+      
+        assert!(simulator.log_flux.is_finite(), "Flux must remain finite");
+
+        let last_time_step = time_steps.last().unwrap();
+        
+        assert!(*last_time_step <= max_t, "Simulation time should not exceed last time point in t_max");
+        
         println!("Sequence length:");
-        for l in sequence_lengths {
+        for l in &sequence_lengths {
             println!("{}", l);
         }
+
+        assert!(sequence_lengths.last().unwrap() <= &sequence.len(), "Sequence length should not exceed total sequence length"); 
+        
     }
 
 }
