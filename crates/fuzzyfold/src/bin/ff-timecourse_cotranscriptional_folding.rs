@@ -18,9 +18,12 @@ use ff_energy::EnergyModel;
 use ff_kinetics::Metropolis;
 use ff_kinetics::LoopStructure;
 use ff_kinetics::LoopStructureSSA;
-use ff_kinetics::timeline::Timeline;
-use ff_kinetics::timeline_plotting::plot_occupancy_over_time;
-use ff_kinetics::MacrostateRegistry;
+use ff_kinetics::timeline_pairsets::Timeline;
+use ff_kinetics::timeline_plotting_pairsets::plot_occupancy_over_time;
+use ff_kinetics::MacrostateRegistryPT;
+//use ff_kinetics::timeline::Timeline;
+//use ff_kinetics::timeline_plotting::plot_occupancy_over_time;
+//use ff_kinetics::MacrostateRegistry;
 
 use fuzzyfold::input_parsers::read_fasta_like_input;
 use fuzzyfold::energy_parsers::EnergyModelArguments;
@@ -84,7 +87,7 @@ fn main() -> Result<()> {
     let sequence_len = sequence.len();
 
     let t_lin = cli.simulation.t_lin; //timepoints per nucleotide
-    let t_ext = cli.simulation.t_ext; //extension time
+    let t_ext = cli.simulation.t_ext; //extension time (simulation time per nucleotide)
     let t_log = cli.simulation.t_log; //timepoints for posttranscriptional folding 
     let t_end = cli.simulation.t_end; //simulation stop time (Here: posttranscriptional stop time) (Only posttranscriptional time or total time??)
     
@@ -106,7 +109,7 @@ fn main() -> Result<()> {
     // Logarithmic tail
     let start = *times.last().unwrap();
     let log_start = start.ln();
-    let log_end = start + t_end.ln();
+    let log_end = (start + t_end).ln();
     for i in 1..t_log {
         let frac = i as f64 / t_log as f64;
         let value = (log_start + frac * (log_end - log_start)).exp();
@@ -116,7 +119,8 @@ fn main() -> Result<()> {
 
 
 
-    let mut registry = MacrostateRegistry::from((&sequence, &emodel));
+    let mut registry = MacrostateRegistryPT::from((&sequence, &emodel));
+    //let mut registry = MacrostateRegistry::from((&sequence, &emodel));
     let _ = registry.insert_files(&cli.macrostates);
 
     println!("Macrostates:\n{}", registry.iter()
@@ -198,9 +202,9 @@ fn main() -> Result<()> {
 
                     simulator.simulate(
                         &mut rng(), //random number 
-                        t_ext + t,
+                        t_ext,
                         |t_sim, tinc, flux, ls| {
-                            while t_idx < idx + t_lin && t + t_sim + tinc >= times[t_idx] {
+                            while t_idx < idx + t_lin + 1 && t + t_sim + tinc >= times[t_idx] {
                                 let structure = DotBracketVec::from(ls);
                                 timeline.assign_structure(t_idx, &structure);
                                 t_idx += 1;
@@ -210,8 +214,8 @@ fn main() -> Result<()> {
                         },
                     );
 
+                    t_idx = t_idx.max(idx + t_lin); 
                     current_struct = final_struct.clone();
-
                     t = t + t_ext; //update t
 
                     // ---Append sequence with next nucleotide---
@@ -220,7 +224,6 @@ fn main() -> Result<()> {
                     current_struct.0.push(DotBracket::Unpaired);
 
                 }
-                
 
 
                 // ---Postranscriptional folding---
@@ -233,11 +236,12 @@ fn main() -> Result<()> {
                 
                 let cofolding_time = (sequence.len() -1) as f64 * t_ext;
 
-                let total_sim_time = cofolding_time + t_end;  
+                let total_sim_time = cofolding_time + t_end;
 
+    
                 simulator.simulate(
                     &mut rng(),
-                    total_sim_time,
+                    t_end,
                     |t_sim, tinc, _, ls| {
                         while t_idx < times.len() && t + t_sim + tinc >= times[t_idx] {
                             let structure = DotBracketVec::from(ls);
@@ -261,9 +265,7 @@ fn main() -> Result<()> {
 
     let t_final = master.points.last().unwrap().time;
 
-    let cofolding_time = (sequence.len() -1) as f64 * cli.simulation.t_ext;
-                
-    let total_sim_time = cofolding_time + cli.simulation.t_end;  
+    let cofolding_time = (sequence.len() -1) as f64 * cli.simulation.t_ext; 
 
     println!("Final Timeline:\n{}", master);
     plot_occupancy_over_time(&master, &format!("ff_{}.svg", name), cofolding_time, t_final);
@@ -273,6 +275,7 @@ fn main() -> Result<()> {
         let json = to_string_pretty(&serial)?;
         fs::write(path, json)?;
     }
+
 
     Ok(())
 }
