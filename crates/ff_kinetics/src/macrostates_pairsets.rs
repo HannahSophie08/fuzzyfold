@@ -8,6 +8,7 @@ use rand::Rng;
 
 use ff_structure::DotBracketVec;
 use ff_structure::PairTable;
+use ff_structure::PairSet;
 use ff_energy::NucleotideVec;
 use ff_energy::EnergyModel;
 
@@ -61,7 +62,7 @@ use crate::{K0, KB};
 #[derive(Debug)]
 pub struct Macrostate {
     name: String,
-    ensemble: AHashMap<PairTable, (i32, f64)>,
+    ensemble: AHashMap<PairSet, (i32, f64)>,
     ensemble_energy: Option<f64>,
 }
 
@@ -89,9 +90,10 @@ impl Macrostate {
         for dbv in structures {
             let pt = PairTable::try_from(dbv)
                 .expect("Invalid dot-bracket for energy evaluation");
+            let ps = PairSet::from(&pt);
             let en = energy_model.energy_of_structure(sequence, &pt);
             let q = (-en as f64 / 100.0 / rt).exp();
-            ensemble.insert(pt, (en, q));
+            ensemble.insert(ps, (en, q));
             q_sum += q;
         }
         // Turn partition function contributions into probabilities.
@@ -109,7 +111,7 @@ impl Macrostate {
         &self.name
     }
 
-    pub fn ensemble(&self) -> &AHashMap<PairTable, (i32, f64)> {
+    pub fn ensemble(&self) -> &AHashMap<PairSet, (i32, f64)> {
         &self.ensemble
     }
 
@@ -127,14 +129,25 @@ impl Macrostate {
     }
     
     /// Check if a secondary structure is contained in this macrostate.
-    pub fn contains(&self, structure: &PairTable) -> bool {
-        self.ensemble.contains_key(structure)
+    pub fn contains(&self, structure: &PairSet) -> bool {
+
+        for(macrostate_ps, _) in &self.ensemble {
+
+            if macrostate_ps.len() != structure.len() { //if number of pairs doens't match, continue
+                continue;
+            }
+
+            if macrostate_ps.iter().all(|pair| structure.contains(&pair)) {
+                return true;
+            }
+        }
+        false
     }
 
-   
+    
 
     /// Randomly pick a structure according to its probability in the ensemble.
-    pub fn get_random_microstate(&self) -> Option<PairTable> {
+    pub fn get_random_microstate(&self) -> Option<PairSet> {
         if self.ensemble.is_empty() {
             return None;
         }
@@ -258,12 +271,13 @@ impl<'a, E: EnergyModel> MacrostateRegistry<'a, E> {
     pub fn classify(&self, structure: &DotBracketVec) -> usize {
 
         let pt = PairTable::try_from(structure).unwrap();
+        let ps = PairSet::from(&pt);
 
         let mut matches = Vec::new();
     
 
         for (i, ms) in self.macrostates.iter().enumerate() {
-            if ms.contains(&pt) {
+            if ms.contains(&ps) {
                 matches.push(i);
             }
         }
@@ -341,6 +355,8 @@ mod tests {
 
         let pt1 = PairTable::try_from(&db1).unwrap();
 
+        let ps1 = PairSet::from(&pt1);
+
         let macrostate = Macrostate::from_list(
             "lmin=lm3_bh=3.0",
             &seq, 
@@ -354,13 +370,12 @@ mod tests {
         let ensemble = macrostate.ensemble().clone();
         let mut ensemble: Vec<_> = ensemble.iter().collect();
         ensemble.sort_by_key(|(_, (energy, _))| *energy);
-        for (pt, (energy, prob)) in ensemble.iter() {
-            let dbv = DotBracketVec::from(*pt);
-            println!("  {} -> E(s) = {energy}, P(s) = {prob:.4}", dbv);
+        for (ps, (energy, prob)) in ensemble.iter() {
+            println!("PairSet(len={}, pairs={}, -> E(s) = {energy}, P(s) = {prob:.4}", ps.length(), ps.len());
         }
 
-        assert_eq!(macrostate.ensemble().get(&pt1).unwrap().0, -390);
-        assert!((macrostate.ensemble().get(&pt1).unwrap().1 - 0.7669).abs() < 1e-4);
+        assert_eq!(macrostate.ensemble().get(&ps1).unwrap().0, -390);
+        assert!((macrostate.ensemble().get(&ps1).unwrap().1 - 0.7669).abs() < 1e-4);
     }
 
     #[test]
