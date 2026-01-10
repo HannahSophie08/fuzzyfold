@@ -13,6 +13,7 @@
 
 use std::fmt;
 use nohash_hasher::IntSet;
+use std::hash::{Hash, Hasher};
 
 use crate::PairTable;
 use crate::NAIDX;
@@ -20,7 +21,7 @@ use crate::P1KEY;
 
 
 /// A base pair (i, j) with i < j.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Pair {
     i: NAIDX,
     j: NAIDX,
@@ -110,6 +111,13 @@ impl PairSet {
     /// Underlying sequence length (from the originating `PairTable`).
     pub fn length(&self) -> usize {
         self.length
+    }
+}
+
+impl Hash for PairSet {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.length.hash(state);
+        self.to_vec().hash(state); 
     }
 }
 
