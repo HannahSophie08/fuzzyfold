@@ -131,8 +131,6 @@ impl Macrostate {
         self.ensemble.contains_key(structure)
     }
 
-   
-
     /// Randomly pick a structure according to its probability in the ensemble.
     pub fn get_random_microstate(&self) -> Option<DotBracketVec> {
         if self.ensemble.is_empty() {
