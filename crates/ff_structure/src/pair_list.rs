@@ -3,13 +3,8 @@
 //! Compact integer-based representation of base pairs, can 
 //! be used as alternative to PairTable representations.
 //!
-//! A `Pair` is defined by two 16-bit indices (`NAIDX`) packed into a
-//! 32-bit integer key (`P1KEY`) for efficient set and map storage.
-//!
-//! We currently do not povide the conversions from PairList to 
-//! PairTable, mainly because at this stage it is not clear if
-//! PairSet may be used in the future to include pseudoknots. 
-//! 
+//! A `Pair` is defined by two 16-bit indices (`NAIDX`) packed into a vector
+//!  
 
 use std::fmt;
 use std::ops::Deref;
@@ -58,21 +53,21 @@ impl Pair {
     }
 }
 
-/// A collection of base pairs represented as compact integer keys.
+/// A collection of base pairs stored in a vector.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct PairList {
     pairs: Vec<(NAIDX, NAIDX)>,
 }
 
 impl PairList {
-    /// Create an empty pair set for a given sequence length.
+    /// Create an empty pair list.
     pub fn new() -> Self {
         Self {
             pairs: Vec::new()
         }
     }
 
-    /// Number of pairs contained in the set.
+    /// Number of pairs contained in the list.
     pub fn len(&self) -> usize {
         self.pairs.len()
     }
@@ -93,7 +88,7 @@ impl PairList {
         }
     }
 
-    /// Check if a pair exists in the set.
+    /// Check if a pair exists in the list.
     pub fn contains(&self, pair: &Pair) -> bool {
         self.pairs.contains(&(pair.i(), pair.j()))
     }
