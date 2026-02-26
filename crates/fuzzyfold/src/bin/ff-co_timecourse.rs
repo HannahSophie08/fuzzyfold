@@ -1,3 +1,26 @@
+//! Stochastic cotranscriptional folding simulator 
+//! 
+//! This binary performs stochastic cotranscriptional folding simulations, running multiple simulations in parallel
+//! and merging them into a master timeline. This timeline is used to produce an occupancy plot.
+//! The plot shows the occupancy of predefined macrostates in average over time.
+//! 
+//! Input & start state
+//!-  If no structure is provided, in the input fasta file, the simulation starts by default 
+//!   at transcript length 1 with ".".
+//! - If an initial dot-bracket structure is provided, its length defines the starting transcript lenth.
+//!   The structure is used as the initial structure.
+//! - If the provided structure is full length, it is ignored and the simzlation starts at length 1.  
+//! 
+//! Parameters
+//! - t-ext: extension time (simulation time per transcript length)
+//! - t-end: time of postranscriptional simulation
+//! - t-lin: recorded time steps per transcript length
+//! - t-log: time points recorded for the posttranscriptional simulation on a logarithmic timescale 
+//! - p-pos: pausing sites positions
+//! - t-pos: duration of pausing sites corresponding to `--p-pos`` 
+//! - num-sims: number of simulations performed
+//! - k0: kinetic rate constant 
+
 use std::fs;
 use std::sync::Arc;
 use std::path::Path;
@@ -54,11 +77,11 @@ pub struct Cli {
     #[command(flatten, next_help_heading = "Kinetic model parameters")]
     kinetics: RateModelArguments,
 
-     ///Pausing sites 
+    /// Pausing sites 
     #[arg(long, value_delimiter = ',')]
     t_p: Option<Vec<f64>>,
 
-    ///Pausing sites positions  
+    /// Pausing sites positions  
     #[arg(long, value_delimiter = ',')]
     p_pos: Option<Vec<usize>>,
 }
@@ -72,7 +95,7 @@ fn main() -> Result<()> {
     let rmodel = cli.kinetics.build_model(emodel.temperature());
 
     let (header, sequence, mut structure) = read_fasta_like_input(&cli.input)?;
-    if structure.len() >= sequence.len() {
+    if structure.len() >= sequence.len() { // if the given structure is full length, start from transcript length one 
         structure = DotBracketVec::try_from(".")?;
         println!("Input structure is full-length");
     }
@@ -100,12 +123,12 @@ fn main() -> Result<()> {
     let t_lin = cli.simulation.t_lin; //timepoints per nucleotide
     let t_ext = cli.simulation.t_ext; //extension time (simulation time per nucleotide)
     let t_log = cli.simulation.t_log; //timepoints for posttranscriptional folding 
-    let t_end = cli.simulation.t_end; //simulation stop time (Here: posttranscriptional stop time) (Only posttranscriptional time or total time??)
+    let t_end = cli.simulation.t_end; // posttranscriptional simulation time
     
     let mut times_tl = vec![0.0];
 
+    // Build times_tl vector for timeline
     // Linear segments: append `t_lin` evenly spaced points
-    
     let mut len = 1;
 
     while len < sequence_len {
@@ -136,7 +159,8 @@ fn main() -> Result<()> {
         .collect::<Vec<_>>().join("\n"));
 
     let shared_registry = Arc::new(registry);
-
+    
+    // Create or load master timeline
     // If timeline.json exists, reload instead of starting empty
     let mut master = if let Some(path) = &cli.timeline {
         if Path::new(path).exists() {
@@ -152,54 +176,51 @@ fn main() -> Result<()> {
     };
 
    
-    //build times vector 
+    //---build times vector--- 
     let mut times: Vec<f64> = Vec::new();
-    let mut cotrans_time = 0.0;
 
-    let start = structure.len();
-    println!("Start: {}", start);
-    println!("Times vector: {:?}", times);
+    let start_len = structure.len(); //starting transcript length
     let mut idx = 0;
 
+    // pausing sites
     if let Some(pause_times) = &cli.t_p {
        if let Some(pause_positions) = &cli.p_pos {
-            let mut pos = start;
-            cotrans_time += t_ext;
+            if pause_times.len() != pause_positions.len() { //Check that pausing positions and times match
+                panic!("p_pos and t_pos don't have the same length")
+            }
+            let mut pos = start_len;
             times.push(t_ext);
             pos += 1;
             for &p in pause_positions {
                 while pos < p {
                     times.push(times.last().unwrap() + t_ext);
-                    cotrans_time += t_ext;
                     pos += 1;
                 }
                 if pos == p {
                     times.push(times.last().unwrap() + pause_times[idx]);
-                    cotrans_time += pause_times[idx];
                     idx += 1;
                     pos += 1;
                 }
             }
             while pos < (sequence.len()) {
                 times.push(times.last().unwrap() + t_ext);
-                cotrans_time += t_ext;
                 pos += 1;
             }
-           
+            // Add final postranscriptional folding time 
             times.push(times.last().unwrap() + t_end);
             
        }
-    } else {
+    } else { //no pausing sites
 
         times.push(t_ext);
-        for _ in (start + 1)..(sequence.len()) {
-            cotrans_time += t_ext;
+        for _ in (start_len + 1)..(sequence.len()) {
             times.push(times.last().unwrap() + t_ext);
         }
+        // Add final posttranscriptional folding time 
         times.push(times.last().unwrap() + t_end);
     }
 
-
+    // ---Progress bar---
     println!("Simulation progress:");
     let pb = ProgressBar::new(cli.num_sims as u64);
     pb.set_style(
@@ -209,6 +230,8 @@ fn main() -> Result<()> {
         .progress_chars("#>-"),
     );
 
+    // --- Run simulations in parallel ---
+    // Each simulation produces its own timeline
     let timelines: Vec<_> = (0..cli.num_sims)
         .into_par_iter()
         .map_init(
@@ -216,12 +239,12 @@ fn main() -> Result<()> {
             |pb, _| {
                 let registry = Arc::clone(&shared_registry);
                 let mut timeline = Timeline::new(&times_tl, registry);
-
+                // Build loop structure and simulator 
                 let loops = LoopStructure::try_from((&sequence[..], &pairings, &emodel)).unwrap();
                 let mut simulator = LoopStructureSSA::from((loops, &rmodel));
                 
                 let mut t_idx = 0;
-
+                // Simulation 
                 simulator.co_simulate(
                     &mut rng(),
                     times.clone(),
@@ -241,12 +264,15 @@ fn main() -> Result<()> {
         ).collect();
     pb.finish_with_message("All simulations complete!");
 
-    // Master timeline
+    // Merge timelines to master timeline 
     for timeline in timelines {
         master.merge(timeline);
     }
 
+    let cotrans_time = times[times.len() - 2]; 
+
     println!("Final Timeline:\n{}", master);
+    // Generate occupancy plot
     plot_occupancy_over_time(&master, &format!("ff_{}.svg", name), cotrans_time, *times.last().unwrap());
 
     if let Some(path) = cli.timeline {
@@ -254,9 +280,6 @@ fn main() -> Result<()> {
         let json = to_string_pretty(&serial)?;
         fs::write(path, json)?;
     }
-
-    //println!("times length {}, values: {:?}", times.len(), times);
-    //println!("times_tl length {}, values {:?}", times_tl.len(), times_tl, );
 
     Ok(())
 }

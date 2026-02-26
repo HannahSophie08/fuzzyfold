@@ -1,3 +1,19 @@
+//! Stochastic cotranscriptional folding simulator 
+//! 
+//! This binary performs stochastic cotranscriptional folding simulations, running multiple simulations in parallel
+//! and merging them into a master timeline. This timeline is used to produce an occupancy plot.
+//! The plot shows the occupancy of predefined macrostates in average over time.
+//! 
+//! Here the simulation always starts at sequence length 1 with the initial structure ".".
+//! 
+//! Parameters
+//! - t-ext: extension time (simulation time per transcript length)
+//! - t-end: time of postranscriptional simulation
+//! - t-lin: recorded time steps per transcript length
+//! - t-log: time points recorded for the posttranscriptional simulation on a logarithmic timescale 
+//! - num-sims: number of simulations performed
+//! - k0: rate constant 
+
 use clap::Parser;
 use anyhow::Result;
 use colored::*;
@@ -18,10 +34,12 @@ use ff_energy::EnergyModel;
 use ff_kinetics::Metropolis;
 use ff_kinetics::LoopStructure;
 use ff_kinetics::LoopStructureSSA;
+// --macrostates as pairlists--
 use ff_kinetics::timeline_pairlists::Timeline;
 use ff_kinetics::timeline_plotting_pairlists::plot_occupancy_over_time;
 use ff_kinetics::MacrostateRegistryPL;
-//use ff_kinetics::timeline::Timeline;
+// --macrostates as dotbracket vector--
+//use ff_kinetics::timeline::Timeline; 
 //use ff_kinetics::timeline_plotting::plot_occupancy_over_time;
 //use ff_kinetics::MacrostateRegistry;
 
@@ -30,13 +48,15 @@ use fuzzyfold::energy_parsers::EnergyModelArguments;
 use fuzzyfold::kinetics_parsers::RateModelArguments;
 use fuzzyfold::kinetics_parsers::TimelineParameters;
 
+
 #[derive(Debug, Parser)]
-#[command(version, about = "Stochastically simulated nucleic acid ensembles over time.")]
+#[command(version, about = "Stochastically simulated nucleic acid ensembles over time during transcription.")]
 pub struct Cli {
     /// Input file (FASTA-like), or "-" for stdin
     #[arg(value_name = "INPUT", default_value = "-")]
     input: String,
 
+    /// Number of simulations
     #[arg(short, long, default_value_t = 1)]
     num_sims: usize,
 
@@ -82,19 +102,18 @@ fn main() -> Result<()> {
     println!("Output after {} simulations: \n - {:?}\n - {:?}\n - {:?}",
         cli.num_sims, cli.kinetics, cli.simulation, cli.energy);
 
-    // --Output times--
-
+    // --- Output times ---
     let sequence_len = sequence.len();
 
     let t_lin = cli.simulation.t_lin; //timepoints per nucleotide
     let t_ext = cli.simulation.t_ext; //extension time (simulation time per nucleotide)
     let t_log = cli.simulation.t_log; //timepoints for posttranscriptional folding 
-    let t_end = cli.simulation.t_end; //simulation stop time (Here: posttranscriptional stop time) (Only posttranscriptional time or total time??)
+    let t_end = cli.simulation.t_end; // posttranscriptional simulation time
     
+    // --- Build times vector for timeline ---
     let mut times = vec![0.0];
 
     // Linear segments: append `t_lin` evenly spaced points
-    
     let mut len = 1;
 
     while len < sequence_len {
@@ -117,9 +136,9 @@ fn main() -> Result<()> {
     }
     times.push(start + t_end);
 
-
+    // --- Build macrostates registry ---
     let mut registry = MacrostateRegistryPL::from((&sequence, &emodel));
-    //let mut registry = MacrostateRegistry::from((&sequence, &emodel));
+    //let mut registry = MacrostateRegistry::from((&sequence, &emodel)); //macrostates as dotbracket vector
     let _ = registry.insert_files(&cli.macrostates);
 
     println!("Macrostates:\n{}", registry.iter()
@@ -128,6 +147,7 @@ fn main() -> Result<()> {
 
     let shared_registry = Arc::new(registry);
 
+    // --- Create or load master timeline ---
     // If timeline.json exists, reload instead of starting empty
     let mut master = if let Some(path) = &cli.timeline {
         if Path::new(path).exists() {
@@ -142,6 +162,7 @@ fn main() -> Result<()> {
         Timeline::new(&times, Arc::clone(&shared_registry))
     };
 
+    // Progress bar 
     println!("Simulation progress:");
     let pb = ProgressBar::new(cli.num_sims as u64);
     pb.set_style(
@@ -150,6 +171,9 @@ fn main() -> Result<()> {
         .unwrap()
         .progress_chars("#>-"),
     );
+
+    // --- Run simulations in parallel ---
+    // Each simulation produces its own timeline
 
     let timelines: Vec<_> = (0..cli.num_sims)
         .into_par_iter()
@@ -168,6 +192,7 @@ fn main() -> Result<()> {
 
                 let mut t_idx = 0;
 
+                // --- Cotranscriptional folding loop ---
 
                 while current_len < sequence.len() { //repeat until end of transcription
 
@@ -196,6 +221,7 @@ fn main() -> Result<()> {
                         continue;
                     }
 
+
                     let mut simulator = LoopStructureSSA::from((loops, &rmodel)); //build simulator from loop structure and rate model
                     
                     let mut final_struct = current_struct.clone();
@@ -204,7 +230,7 @@ fn main() -> Result<()> {
 
                     simulator.simulate(
                         &mut rng(), //random number 
-                        t_ext,
+                        t_ext, //extension time as simulation time 
                         |t_sim, tinc, _flux, ls| {
                             while t_idx < idx + t_lin + 1 && t + t_sim + tinc >= times[t_idx] {
                                 let structure = DotBracketVec::from(ls);
@@ -229,17 +255,16 @@ fn main() -> Result<()> {
 
                 // ---Postranscriptional folding---
 
-
                 let pairings = PairTable::try_from(&current_struct).unwrap();//build PairTable
                 let loops = LoopStructure::try_from((&current_seq[..], &pairings, &emodel)).unwrap(); //build loop structure
 
                 let mut simulator = LoopStructureSSA::from((loops, &rmodel)); //build simulator from loop structure and rate model
                 
-                let cofolding_time = (sequence.len() -1) as f64 * t_ext;
+                let cofolding_time = (sequence.len() -1) as f64 * t_ext; //cotranscriptional folding time
 
                 simulator.simulate(
                     &mut rng(),
-                    cofolding_time + t_end,
+                    cofolding_time + t_end, //t_max = cotranscriptional folding time + postranscriptional folding time 
                     |t_sim, tinc, _, ls| {
                         while t_idx < times.len() && t + t_sim + tinc >= times[t_idx] {
                             let structure = DotBracketVec::from(ls);
@@ -256,15 +281,16 @@ fn main() -> Result<()> {
 
     pb.finish_with_message("All simulations complete!");
 
-    // Master timeline
+    // Merge timelines to master timeline
     for timeline in timelines {
         master.merge(timeline);
     }
 
-    let t_final = master.points.last().unwrap().time;
+    let t_final = master.points.last().unwrap().time; //last time point 
 
     let cofolding_time = (sequence.len() -1) as f64 * cli.simulation.t_ext; 
 
+    // ---Generate occupancy plot---
     println!("Final Timeline:\n{}", master);
     plot_occupancy_over_time(&master, &format!("ff_{}.svg", name), cofolding_time, t_final);
 

@@ -1,3 +1,21 @@
+//! Stochastic cotranscriptional folding simulator 
+//! 
+//! This binary performs stochastic cotranscriptional folding simulations, producing folding trajectories.
+//! 
+//! Input & start state
+//!-  If no structure is provided, in the input fasta file, the simulation starts by default 
+//!   at transcript length 1 with ".".
+//! - If an initial dot-bracket structure is provided, its length defines the starting transcript lenth.
+//!   The structure is used as the initial structure.
+//! - If the provided structure is full length, it is ignored and the simzlation starts at length 1.  
+//! 
+//! Parameters
+//! - t-ext: extension time (simulation time per transcript length)
+//! - t-end: time of postranscriptional simulation 
+//! - p-pos: pausing sites positions
+//! - t-pos: duration of pausing sites corresponding to `--p-pos`` 
+//! - k0: kinetic rate constant 
+
 use ff_structure::DotBracketVec;
 use rand::rng;
 use clap::Parser;
@@ -52,7 +70,7 @@ fn main() -> Result<()> {
     let rmodel = cli.kinetics.build_model(emodel.temperature());
 
     let (header, sequence, mut structure) = read_fasta_like_input(&cli.input)?;
-    if structure.len() >= sequence.len() {
+    if structure.len() >= sequence.len() { // if the given structure is full length, start from transcript length one 
         structure = DotBracketVec::try_from(".")?;
         println!("Input structure was full-length");
     }
@@ -73,7 +91,7 @@ fn main() -> Result<()> {
     let mut simulator = LoopStructureSSA::from((loops, &rmodel));
 
 
-    //build times vector 
+    //---build times vector--- 
     let mut times: Vec<f64> = Vec::new();
 
     let start = structure.len();
@@ -83,6 +101,10 @@ fn main() -> Result<()> {
 
     if let Some(pause_times) = &cli.t_p {
        if let Some(pause_positions) = &cli.p_pos {
+            //Check that pausing positions and times match
+            if pause_times.len() != pause_positions.len() { 
+                    panic!("p_pos and t_pos don't have the same length")
+            }
             let mut pos = start;
             times.push(cli.t_ext);
             pos += 1;
@@ -101,20 +123,20 @@ fn main() -> Result<()> {
                 times.push(times.last().unwrap() + cli.t_ext);
                 pos += 1;
             }
-           
+            // add posttranscriptional folding time 
             times.push(times.last().unwrap() + cli.t_end);
             
        }
+    // no pausing sites
     } else {
-
         times.push(cli.t_ext);
         for _ in (start + 1)..(sequence.len()) {
             times.push(times.last().unwrap() + cli.t_ext);
         }
+        // add posttranscriptional folding time
         times.push(times.last().unwrap() + cli.t_end);
     }
-
-
+    // ---Simulation---
     simulator.co_simulate(
         &mut rng(), 
         times, 

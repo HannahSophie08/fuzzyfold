@@ -54,15 +54,15 @@ impl RateModelArguments {
 
 #[derive(Debug, Args)]
 pub struct TimelineParameters {
-    /// The last time point of the linear scale.
+    /// The last time point of the linear scale (Cotranscriptional: extension time).
     #[arg(long, default_value_t = 1e-5)]
     pub t_ext: f64,
 
-    /// Simulation stop time.
+    /// Simulation stop time (Cotranscriptional: posstranscriptional folding time).
     #[arg(long, default_value_t = 1.0)]
     pub t_end: f64,
 
-    /// Number of time points on the linear scale: [0..t-ext]
+    /// Number of time points on the linear scale: [0..t-ext] (cotrancriptional: number of time points per transcript length)
     #[arg(long, default_value_t = 1)]
     pub t_lin: usize,
 
