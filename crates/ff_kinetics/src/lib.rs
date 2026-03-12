@@ -7,6 +7,7 @@ pub mod enum_neighbors;
 mod rate_model;
 mod stochastic_simulation;
 mod macrostates;
+mod macrostates_pairlist;
 mod movesets;
 
 pub use rate_model::*;

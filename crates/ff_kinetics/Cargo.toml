@@ -15,6 +15,7 @@ categories.workspace = true
 ff_structure.workspace = true
 ff_energy.workspace = true
 
+ahash = { workspace = true }
 criterion.workspace = true
 log.workspace = true
 nohash-hasher.workspace = true
