@@ -90,7 +90,7 @@ impl Macrostate {
         for dbv in structures {
             let pt = PairTable::try_from(dbv)
                 .expect("Invalid dot-bracket for energy evaluation");
-            let ps = PairList::from(&pt);
+            let pl = PairList::from(&pt);
 
             let en = match energy_model.energy_of_structure(sequence, &pt) {
                 Ok(val) => val, // use the value
@@ -101,7 +101,7 @@ impl Macrostate {
             };
 
             let q = (-en as f64 / 100.0 / rt).exp();
-            ensemble.insert(ps, (en, q));
+            ensemble.insert(pl, (en, q));
             q_sum += q;
         }
         // Turn partition function contributions into probabilities.
@@ -139,16 +139,16 @@ impl Macrostate {
     /// Check if a secondary structure is contained in this macrostate.
     pub fn contains(&self, structure: &PairList) -> bool {
 
-        for(macrostate_ps, _) in &self.ensemble {
+        for(macrostate_pl, _) in &self.ensemble {
 
-            //println!("Comparing: macrostate_ps.len()={}, structure.len()={}, macrostate_ps.length()={}, structure.length()={}", 
-              //   macrostate_ps.len(), structure.len(), macrostate_ps.length(), structure.length());
+            //println!("Comparing: macrostate_pl.len()={}, structure.len()={}, macrostate_pl.length()={}, structure.length()={}", 
+              //   macrostate_pl.len(), structure.len(), macrostate_pl.length(), structure.length());
 
-            if macrostate_ps.len() != structure.len() { //if number of pairs doesn't match, continue
+            if macrostate_pl.len() != structure.len() { //if number of pairs doesn't match, continue
                 continue;
             }
 
-            if *macrostate_ps == *structure {
+            if *macrostate_pl == *structure {
                 return true;
             }
         }
@@ -239,7 +239,7 @@ impl<'a, E: EnergyModel> MacrostateRegistry<'a, E> {
             .trim()
             .to_string();
 
-        let file_seq = NucleotideVec::from_lossy(&seq_line);
+        let file_seq = NucleotideVec::try_from_rna(&seq_line).unwrap();
         if &file_seq != self.sequence {
             return Err(io_err("Sequence does not match input sequence", source));
         }
@@ -282,13 +282,13 @@ impl<'a, E: EnergyModel> MacrostateRegistry<'a, E> {
     pub fn classify(&self, structure: &DotBracketVec) -> usize {
 
         let pt = PairTable::try_from(structure).unwrap();
-        let ps = PairList::from(&pt);
+        let pl = PairList::from(&pt);
 
         let mut matches = Vec::new();
     
 
         for (i, ms) in self.macrostates.iter().enumerate() {
-            if ms.contains(&ps) {
+            if ms.contains(&pl) {
                 matches.push(i);
             }
         }
@@ -341,7 +341,7 @@ mod tests {
     use ff_energy::ViennaRNA;
 
     #[test]
-    fn test_macrostate_init() {
+    fn test_macrostatepl_init() {
         /*        
         >lmin=lm3_bh=3.0
         UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC
@@ -368,7 +368,7 @@ mod tests {
 
         let pt1 = PairTable::try_from(&db1).unwrap();
 
-        let ps1 = PairList::from(&pt1);
+        let pl1 = PairList::from(&pt1);
 
         let macrostate = Macrostate::from_list(
             "lmin=lm3_bh=3.0",
@@ -383,16 +383,17 @@ mod tests {
         let ensemble = macrostate.ensemble().clone();
         let mut ensemble: Vec<_> = ensemble.iter().collect();
         ensemble.sort_by_key(|(_, (energy, _))| *energy);
-        for (ps, (energy, prob)) in ensemble.iter() {
-            println!("PairList(len={}, pairs={}, -> E(s) = {energy}, P(s) = {prob:.4}", ps.length(), ps.len());
+        for (pl, (energy, prob)) in ensemble.iter() {
+            println!("PairList(len={}, pairs={}, -> E(s) = {energy}, P(s) = {prob:.4}", pl.len(), pl.len());
         }
 
-        assert_eq!(macrostate.ensemble().get(&ps1).unwrap().0, -390);
-        assert!((macrostate.ensemble().get(&ps1).unwrap().1 - 0.7669).abs() < 1e-4);
+        assert_eq!(macrostate.ensemble().get(&pl1).unwrap().0, -390);
+        println!("{}", macrostate.ensemble().get(&pl1).unwrap().1);
+        assert!((macrostate.ensemble().get(&pl1).unwrap().1 - 0.7669).abs() < 1e-4);
     }
 
     #[test]
-    fn test_macrostateregistry_init_and_classify() {
+    fn test_macrostateplregistry_init_and_classify() {
         let energy_model = ViennaRNA::default();
         let seq = NucleotideVec::try_from("UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC").unwrap();
 
