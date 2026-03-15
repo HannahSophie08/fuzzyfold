@@ -2,12 +2,15 @@ use std::fmt;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::convert::TryFrom;
+use nohash_hasher::IntSet;
 
 use crate::PairTable;
 use crate::MultiPairTable;
 use crate::MultiStruct;
 use crate::StrandPairTable;
 use crate::StructureError;
+
+pub type NonPairSet = IntSet<usize>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DotBracket {
@@ -160,6 +163,22 @@ impl fmt::Display for DotBracketVec {
             write!(f, "{}", char::from(*db))?;
         }
         Ok(())
+    }
+}
+
+impl DotBracketVec {
+    /// Returns a set of all indices that are currently unpaired ('.').
+    pub fn get_non_pair_set(&self) -> NonPairSet {
+        // We can estimate capacity: usually, many bases are unpaired.
+        let mut non_pairs = IntSet::default();
+
+        for (i, symbol) in self.0.iter().enumerate() {
+            if let DotBracket::Unpaired = symbol {
+                non_pairs.insert(i);
+            }
+        }
+
+        non_pairs
     }
 }
 

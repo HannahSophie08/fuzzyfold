@@ -338,7 +338,7 @@ impl<'a, E: EnergyModel> MacrostateRegistry<'a, E> {
 mod tests {
     use super::*;
     use std::io::Cursor;
-    use ff_energy::ViennaRNA;
+    use ff_energy::{parameters::RNA_TURNER_2004, ViennaRNA};
 
     #[test]
     fn test_macrostatepl_init() {
@@ -355,7 +355,7 @@ mod tests {
         .(((.(...)))).((((........))))...............
         */        
 
-        let energy_model = ViennaRNA::default();
+        let energy_model = ViennaRNA::from_thermo_params(&RNA_TURNER_2004, 37.0);
         let seq = NucleotideVec::try_from("UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC").unwrap();
         let db1 = DotBracketVec::try_from(".((((....)))).((((........))))...............").unwrap();
         let db2 = DotBracketVec::try_from(".((((....)))).((((.(....).))))...............").unwrap();
@@ -377,7 +377,7 @@ mod tests {
             &energy_model
         );
         println!("Macrostate '{}':", macrostate.name());
-        println!("  Ensemble size: {}", macrostate.len());
+        println!("Ensemble size: {}", macrostate.len());
         assert_eq!(macrostate.len(), 8);
 
         let ensemble = macrostate.ensemble().clone();
@@ -388,13 +388,12 @@ mod tests {
         }
 
         assert_eq!(macrostate.ensemble().get(&pl1).unwrap().0, -390);
-        println!("{}", macrostate.ensemble().get(&pl1).unwrap().1);
         assert!((macrostate.ensemble().get(&pl1).unwrap().1 - 0.7669).abs() < 1e-4);
     }
 
     #[test]
     fn test_macrostateplregistry_init_and_classify() {
-        let energy_model = ViennaRNA::default();
+        let energy_model = ViennaRNA::from_thermo_params(&RNA_TURNER_2004, 37.0);
         let seq = NucleotideVec::try_from("UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC").unwrap();
 
         let mut registry = MacrostateRegistry::from((&seq, &energy_model));
