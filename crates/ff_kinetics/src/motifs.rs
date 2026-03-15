@@ -143,7 +143,7 @@ mod tests {
         let db1 = DotBracketVec::try_from(".((((...)))).((((((....))))))...............").unwrap();
         let db2 = DotBracketVec::try_from(".((((...))))..(((((....)))))....(.....).....").unwrap(); // One Pair missing and one extra pair, should be within 0.1 distance
         let db3 = DotBracketVec::try_from(".((((...))))..(((((....)))))....((...)).....").unwrap(); // One Pair missing and two extra pair, should NOT be within 0.1 distance
-
+        let db4 = DotBracketVec::try_from(".(((.....)))..(((((....)))))................").unwrap(); // Two Pairs missing, should NOT be within 0.1 distance
 
         let motif = Motif::from_list(
             "lmin=lm3_bh=3.0",
@@ -168,12 +168,19 @@ mod tests {
 
         assert!(motif.contains(&ps, &nps));
 
-        //Incorrect Structure
+        //Incorrect Structure db3
         let pt = PairTable::try_from(&db3).unwrap();
         let ps = PairSet::from(&pt);
         let nps = db3.get_non_pair_set();
 
-        assert!(motif.contains(&ps, &nps));
+        assert!(!motif.contains(&ps, &nps));
+
+        //Incorrect Structure db4
+        let pt = PairTable::try_from(&db4).unwrap();
+        let ps = PairSet::from(&pt);
+        let nps = db4.get_non_pair_set();
+
+        assert!(!motif.contains(&ps, &nps));
 
     }
 
