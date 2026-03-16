@@ -11,6 +11,7 @@ use nohash_hasher::IntSet;
 use ff_structure::DotBracketVec;
 use ff_structure::PairTable;
 use ff_structure::PairList;
+use ff_structure::ConstrPosMap;
 use ff_structure::PairSet;
 use ff_energy::NucleotideVec;
 use ff_energy::EnergyModel;
@@ -23,11 +24,10 @@ type NonPairSet = IntSet<usize>;
 #[derive(Debug)]
 pub struct Motif {
     name: String,
-    forced_paired: PairSet,
-    forced_unpaired: NonPairSet,
+    contr_pos_map: ConstrPosMap,
     motif_energy: Option<f64>,
     motif_prob: Option<f64>,
-    dist_percentage: f64
+    allowed_distance: usize
 }
 
 impl Motif {
@@ -36,11 +36,10 @@ impl Motif {
     pub fn new_catch_all(name: &str) -> Self {
         Motif { 
             name: name.to_owned(),
-            forced_paired: PairSet::new(0),
-            forced_unpaired: NonPairSet::default(),
+            contr_pos_map: ConstrPosMap::new(),
             motif_energy: None,
             motif_prob: None,
-            dist_percentage: 1.0
+            allowed_distance: 0
         }
     }
 
@@ -62,11 +61,10 @@ impl Motif {
                 
         Self {
         name: name.to_owned(),
-        forced_paired: ps,
-        forced_unpaired: nps,
+        contr_pos_map: ConstrPosMap::new(), // HERE
         motif_energy: Some(0.0), //Change this
         motif_prob: Some(0.0), //Change this
-        dist_percentage: dist_percentage
+        allowed_distance: allowed_distance
         }
     }
 
@@ -91,7 +89,7 @@ impl Motif {
     }
 
     /// Check if a secondary structure is contained in this motif.
-    pub fn contains(&self, structure_paired: &PairSet, structure_unpaired: &NonPairSet) -> bool {
+    pub fn contains_old(&self, structure_paired: &PairSet, structure_unpaired: &NonPairSet) -> bool {
         // 1) Quick Check by lengths of sets
         // 1.1) Paired
         let n_paired = self.n_paired();
@@ -119,6 +117,11 @@ impl Motif {
             return false
         }
         true
+    }
+
+        /// Check if a secondary structure is contained in this motif.
+    pub fn contains(&self, structure: &PairTable) -> bool {
+        
     }
 }
 

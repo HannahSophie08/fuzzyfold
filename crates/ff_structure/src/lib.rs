@@ -6,6 +6,7 @@ mod loop_table;
 mod pair_list;
 mod pair_set;
 mod pair;
+mod constr_pos_map;
 
 pub use error::*;
 pub use dotbracket::*;
@@ -15,6 +16,7 @@ pub use loop_table::*;
 pub use pair_list::*;
 pub use pair_set::*;
 pub use pair::*;
+pub use constr_pos_map::*;
 
 
 /// Nucleic Acid INdeX: we use `u16` (0 to 65k), which is plenty for nucleic acids.
