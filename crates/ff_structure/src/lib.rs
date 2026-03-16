@@ -1,5 +1,6 @@
 mod error;
 mod dotbracket;
+mod dotbracket_ext;
 mod pair_table;
 mod multi_pair_table;
 mod loop_table;
@@ -7,6 +8,7 @@ mod pair_set;
 
 pub use error::*;
 pub use dotbracket::*;
+pub use dotbracket_ext::*;
 pub use pair_table::*;
 pub use multi_pair_table::*;
 pub use loop_table::*;
