@@ -2,6 +2,7 @@
 
 use std::ops::{Deref, DerefMut};
 use std::convert::TryFrom;
+
 use crate::NAIDX;
 use crate::StructureError;
 use std::collections::HashMap;
@@ -11,7 +12,7 @@ use crate::{DotBracket, DotBracketVec};
 /// be constructed by From or TryFrom traits, but then be save to use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConstrPos {
-    Pair(usize),
+    Pair(NAIDX),
     X,
 }
 
@@ -21,6 +22,12 @@ pub struct ConstrPosMap(pub HashMap<usize, ConstrPos>);
 impl ConstrPosMap {
     pub fn new() -> Self {
         ConstrPosMap(HashMap::new())
+    }
+
+    pub fn to_sorted_list(&self) -> Vec<(usize, ConstrPos)> {
+        let mut sorted_list: Vec<_> = self.0.iter().map(|(&key, value)| (key, value.clone())).collect();
+        sorted_list.sort_by(|a, b| a.0.cmp(&b.0)); // Sort by the key (usize)
+        sorted_list // Return the sorted list of tuples
     }
 }
 
@@ -42,8 +49,8 @@ impl TryFrom<&str> for ConstrPosMap {
     type Error = StructureError;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        let mut stack = Vec::new();
         let mut map = HashMap::new();
+        let mut stack: Vec<usize> = Vec::new();
 
         for (i, c) in s.chars().enumerate() {
             match c {
@@ -51,7 +58,16 @@ impl TryFrom<&str> for ConstrPosMap {
 
                 ')' => {
                     let j = stack.pop().ok_or(StructureError::UnmatchedClose(i))?;
-                    map.insert(j, ConstrPos::Pair(i));
+
+                    let i_idx: NAIDX = i
+                        .try_into()
+                        .map_err(|_| StructureError::InvalidToken(
+                        "index too large".to_string(),
+                        "structure".to_string(),
+                        i,
+                    ))?;
+
+                    map.insert(j, ConstrPos::Pair(i_idx));
                 }
 
                 'x' => {
@@ -70,8 +86,9 @@ impl TryFrom<&str> for ConstrPosMap {
             }
         }
 
-        if let Some(i) = stack.pop() {
-            return Err(StructureError::UnmatchedOpen(i));
+        // unmatched '('
+        if let Some(unmatched) = stack.pop() {
+            return Err(StructureError::UnmatchedOpen(unmatched as usize));
         }
 
         Ok(ConstrPosMap(map))
@@ -83,24 +100,36 @@ impl TryFrom<&DotBracketVec> for ConstrPosMap {
     type Error = StructureError;
 
     fn try_from(db: &DotBracketVec) -> Result<Self, Self::Error> {
-        let mut stack = Vec::new();
         let mut map = HashMap::new();
+        let mut stack: Vec<usize> = Vec::new();
 
         for (i, dot) in db.iter().enumerate() {
             match dot {
                 DotBracket::Open => stack.push(i),
+
                 DotBracket::Close => {
                     let j = stack.pop().ok_or(StructureError::UnmatchedClose(i))?;
-                    map.insert(i, ConstrPos::Pair(j));
+
+                    let i_idx: NAIDX = i
+                        .try_into()
+                        .map_err(|_| StructureError::InvalidToken(
+                        "index too large".to_string(),
+                        "structure".to_string(),
+                        i,
+                    ))?;
+
+                    map.insert(j, ConstrPos::Pair(i_idx));
                 }
-                // Make sure this enum is correct for forced unpaired positions
+
                 DotBracket::Unpaired => {
                     map.insert(i, ConstrPos::X);
                 }
+
                 DotBracket::Break => unreachable!("unexpected Break in single-stranded case"),
             }
         }
 
+        // Handle unmatched open parentheses
         if let Some(i) = stack.pop() {
             return Err(StructureError::UnmatchedOpen(i));
         }

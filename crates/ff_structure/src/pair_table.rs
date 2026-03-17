@@ -27,6 +27,10 @@ impl PairTable {
         }
         true
     }
+
+    pub fn get(&self, index: &usize) -> Option<NAIDX> {
+        return self[*index];
+    }
 }
 
 impl Deref for PairTable {
