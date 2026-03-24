@@ -49,6 +49,11 @@ path = "src/bin/ff-timecourse_cotranscriptional_folding.rs"
 name = "ff-accessibility"
 path = "src/bin/ff-accessibility.rs"
 
+[[bin]]
+name = "ff-co_structure_count"
+path = "src/bin/ff-co_structure_count.rs"
+
+
 [dependencies]
 ff_structure.workspace = true
 ff_energy.workspace = true
