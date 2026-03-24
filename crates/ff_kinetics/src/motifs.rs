@@ -1,27 +1,18 @@
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
-use std::collections::HashSet;
 use std::io;
 use std::path::PathBuf;
-use ahash::AHashMap;
-use rand::Rng;
-use nohash_hasher::IntSet;
 
 use ff_structure::DotBracketVec;
 use ff_structure::PairTable;
-use ff_structure::PairList;
 use ff_structure::ConstrPosMap;
-use ff_structure::PairSet;
 use ff_structure::ConstrPos;
 use ff_structure::NAIDX;
 use ff_energy::NucleotideVec;
 use ff_energy::EnergyModel;
 
-
 use crate::{K0, KB};
-
-type NonPairSet = IntSet<usize>;
 
 #[derive(Debug)]
 pub struct Motif {
@@ -87,6 +78,10 @@ impl Motif {
         &self.name
     }
 
+    pub fn allowed_distance(&self) -> &NAIDX {
+        &self.allowed_distance
+    }
+
     pub fn energy(&self) -> Option<f64> {
         self.motif_energy
     }
@@ -94,12 +89,18 @@ impl Motif {
     pub fn prob(&self) -> Option<f64> {
         self.motif_prob
     }
-        /// Check if a secondary structure is contained in this motif.
+
+    /// Check if a secondary structure is contained in this motif.
     pub fn contains(&self, structure: &PairTable) -> bool {
+        let mut dist_counter = 0;
+
         for (key, value) in &self.constr_pos_map.0 {
+            if *key as usize >= structure.len() {
+                return false; 
+            }
+
             let entry: Option<NAIDX> = structure.get(key);
 
-            let mut dist_counter = 0;
             match value {
                 // Pair is mismatched -> add distance of 2
                 ConstrPos::Pair(expected) => {
@@ -164,70 +165,63 @@ impl<'a, E: EnergyModel> MotifRegistry<'a, E> {
     pub fn insert_from_reader<R: BufRead>(&mut self, reader: R, source: &str) -> io::Result<()> {
         let mut lines = reader.lines();
 
-        // Step 1: Read the sequence line first (before motifs)
+        // Read the sequence line first
         let seq_line = lines
             .next()
             .ok_or_else(|| io_err("Missing sequence line", source))??
             .trim()
             .to_string();
 
-        // Step 2: Parse the sequence
+        // Parse sequence
         let file_seq = NucleotideVec::try_from(seq_line.as_str())
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         if &file_seq != self.sequence {
             return Err(io_err("Sequence does not match input sequence", source));
         }
 
-        // Step 3: Initialize the motifs collection
         let mut motifs = Vec::new();
 
-        // Step 4: Read the motif lines
-        let mut warned_trailing = false;
-        for (lineno, line) in lines.enumerate() {
-            let line = line?;
-            let line = line.trim();
+        // Read the motif lines
+        while let Some(line_result) = lines.next() {
+            let line = line_result?.trim().to_string();
 
-            // Skip empty lines and comments
+            // Skip empty lines/comments
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
 
-            // Split the motif line into the header (name, distance) and the dot-bracket structure
-            let (motif_header, structure_str) = match line.split_once(char::is_whitespace) {
-                Some((header, structure)) => (header, structure),
-                None => {
-                    return Err(io_err(
-                        &format!("Invalid motif format at line {}", lineno + 3),
-                        source,
-                    ));
-                }
-            };
-
-            // Step 5: Parse the motif header (name and distance)
-            let mut header_parts = motif_header.split_whitespace();
-            let motif_name = header_parts
-                .next()
-                .ok_or_else(|| io_err("Missing motif name", source))?
-                .to_string();
+            // Handle the Header Line (e.g., ">motif_name1 0")
+            if !line.starts_with('>') {
+                return Err(io_err("Expected motif header starting with '>'", source));
+            }
             
-            let distance_str = header_parts
-                .next()
-                .ok_or_else(|| io_err("Missing motif distance", source))?;
+            let header = line.trim_start_matches('>');
+            let mut parts = header.split_whitespace();
+            
+            let motif_name = parts.next()
+                .ok_or_else(|| io_err("Missing motif name", source))?.to_string();
+            
+            let distance_str = parts.next()
+                .ok_or_else(|| io_err("Missing distance", source))?;
+                
+            let allowed_distance = distance_str.parse::<NAIDX>()
+                .map_err(|_| io_err("Invalid distance", source))?;
 
-            // Attempt to parse the distance string as `NAIDX` (u16)
-            let allowed_distance = distance_str
-                .parse::<NAIDX>()
-                .map_err(|_| io_err(&format!("Invalid motif distance: '{}'. Must be a valid number.", distance_str), source))?;
 
-            // Step 6: Create the motif from the dot-bracket structure
-            if structure_str.is_empty() {
-                return Err(io_err(
-                    &format!("Empty structure for motif at line {}", lineno + 3),
-                    source,
-                ));
+            // Handle the Structure Line (The VERY NEXT line)
+            let structure_line = lines.next()
+                .ok_or_else(|| io_err(&format!("Missing structure for motif {}", motif_name), source))??;
+            
+            let mut parts = structure_line.split_whitespace();
+            // The first part is the structure
+            let structure_str = parts.next().ok_or_else(|| io_err("Empty structure", source))?;
+
+            // If there is a NEXT part, that is "trailing data"
+            if parts.next().is_some(){
+                eprintln!("Warning: trailing data (like extra numbers) ignored in {}.", source);
             }
 
-            // Step 7: Create the Motif
+            // Create the Motif
             let motif = Motif::from_list_str(
                 &motif_name,
                 &self.sequence,
@@ -237,38 +231,27 @@ impl<'a, E: EnergyModel> MotifRegistry<'a, E> {
             );
 
             motifs.push(motif);
-
-            // Step 8: Warn about trailing data (if any)
-            if !warned_trailing {
-                eprintln!(
-                    "Warning: trailing data after dot-bracket structures is ignored in {}.",
-                    source
-                );
-                warned_trailing = true;
-            }
         }
+    
 
-        // Step 9: If no motifs are found, return an error
+        // If no motifs are found, return an error
         if motifs.is_empty() {
             return Err(io_err("No motifs found", source));
         }
 
-        // Step 10: Add the motifs to the macrostates
+        // Add the motifs to the registry
         self.motifs.extend(motifs);
         Ok(())
     }
 
 
-    /// Try to classify a structure:
-    /// - Returns Some(index) if exactly one macrostate contains the structure
-    /// - Returns None if no macrostate matches
-    /// - Panics if more than one macrostate matches (unimplemented)
     pub fn classify(&self, structure: &DotBracketVec) -> Vec<usize> {
         let mut matches: Vec<usize> = Vec::new();
         let structure_pt = PairTable::try_from(structure).unwrap();
 
 
-        for (i, ms) in self.motifs.iter().enumerate() {
+        for (i, ms) in self.motifs.iter().enumerate().skip(1) {
+
             if ms.contains(&structure_pt) {
                 matches.push(i);
             }
@@ -292,15 +275,11 @@ impl<'a, E: EnergyModel> MotifRegistry<'a, E> {
         &self.motifs
     }
 
-    /// Number of macrostates, including the catch-all unassigned macrostate.
+    /// Number of motifs, including the catch-all unassigned motif.
     pub fn len(&self) -> usize {
         self.motifs.len()
     }
 
-    //NOTE: Useless: there is always one.
-    pub fn is_empty(&self) -> bool {
-        self.motifs.is_empty()
-    }
 
     /// Iterate over all macrostates
     pub fn iter(&self) -> impl Iterator<Item = (usize, &Motif)> {
@@ -327,17 +306,13 @@ mod tests {
 
         let energy_model = ViennaRNA::from_thermo_params(&RNA_TURNER_2004, 37.0);
         let seq = NucleotideVec::try_from("UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC").unwrap();
-        let db1 = DotBracketVec::try_from(".((((....)))).((((........))))...............").unwrap(); // REFERENCE
-        let db2 = DotBracketVec::try_from(".((((....)))).((((........))))...............").unwrap(); // MATCHING
-        let db3 = DotBracketVec::try_from(".((((....)))).((((........))))...............").unwrap(); // NON-MATCHING
-
-        let dbs0 = "UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC";
-        let dbs1 = ".((((xxxx)))).((((xxxxxxxx))))..............."; // REFERENCE
-        let dbs2 = ".((((....)))).((((........))))...(......)...."; // MATCHING
-        let dbs3 = ".((((....)))).(((((......)))))..............."; // NON-MATCHING
 
 
-        // // Dot-Bracket Vec Based
+        // Dot-Bracket Vec Based
+
+        // let db1 = DotBracketVec::try_from(".((((xxxx)))).((((xxxxxxxx))))...............").unwrap(); // REFERENCE
+        // let db2 = DotBracketVec::try_from(".((((....)))).((((........))))...(......)....").unwrap(); // MATCHING
+        // let db3 = DotBracketVec::try_from(".((((....)))).(((((......)))))...............").unwrap(); // NON-MATCHING
 
         // let motif = Motif::from_list_dotbracket(
         //     "lmin=lm3_bh=3.0",
@@ -367,6 +342,12 @@ mod tests {
 
 
         // Dot-Bracket String Based
+
+        let dbs0 = "UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC";
+        let dbs1 = ".((((xxxx)))).((((xxxxxxxx))))..............."; // REFERENCE
+        let dbs2 = ".((((....)))).((((........))))...(......)...."; // MATCHING
+        let dbs3 = ".((((....)))).(((((......)))))..............."; // NON-MATCHING
+
         let motif = Motif::from_list_str(
             "lmin=lm3_bh=3.0",
             &seq,
@@ -381,7 +362,6 @@ mod tests {
         println!();
 
 
-        //Correct Structure db2
         println!("{}", dbs0);
         println!("{}", dbs1);
         println!("{}", dbs2);
@@ -391,11 +371,11 @@ mod tests {
         for (k, v) in &motif.constr_pos_map.to_sorted_list() {
             println!("Pos: {} -> Motif: {:?}    Observed: {:?} ", k, v, pt.get(k));
         }
+        println!();
 
         assert!(motif.contains(&pt));
 
 
-        //Correct Structure db3
         println!("{}", dbs0);
         println!("{}", dbs1);
         println!("{}", dbs3);
@@ -405,6 +385,7 @@ mod tests {
         for (k, v) in &motif.constr_pos_map.to_sorted_list() {
             println!("Pos: {} -> Motif: {:?}    Observed: {:?} ", k, v, pt.get(k));
         }
+        println!();
 
         assert!(!motif.contains(&pt));
 
@@ -417,34 +398,38 @@ mod tests {
 
         let mut registry = MotifRegistry::from((&seq, &energy_model));
 
-        // By convention: one unassigned macrostate
         assert_eq!(registry.len(), 1);
         assert_eq!(registry.macrostates()[0].name(), "Unassigned");
 
-        let input = b"UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC\n
-        >motif_name1 0\n
-        .((((xxxx)))).((((xxxxxxxx))))...............\n
-        >motif_name2 0\n
-        .((((....)))).((((........))))...............\n
-        >motif_name3 0\n
-        .((((xxxx)))).((((........))))xxxxxxxxxxxxxxx\n";
+        let input = 
+     r#"UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC
+        >motif_name1 0
+        .((((xxxx)))).((((xxxxxxxx))))...............
+        >motif_name2 0
+        .((((....)))).((((........))))...............
+        >motif_name3 0
+        .((((xxxx)))).((((........))))xxxxxxxxxxxxxxx
+        >motif_name4 0
+        xxxxxxxxxxxxx"#.as_bytes();
 
-        // registry.insert_from_reader(Cursor::new(input), "manual").unwrap();
-        let file_path = PathBuf::from("/home/mescalin/dguerguerian/example_data/test_motif_file.fasta");
-        registry.insert_from_file(&file_path)?;
-        assert_eq!(registry.len(), 4);
+        registry.insert_from_reader(Cursor::new(input), "manual").unwrap();
+        // Can also use a file
+        // let file_path = PathBuf::from("/home/guerguerian/master_work/test.txt");
+        // registry.insert_from_file(&file_path).unwrap();
+        assert_eq!(registry.len(), 5);
 
-        // Build a test macrostate with a few structures
         let s1 = DotBracketVec::try_from(".((((....)))).((((........)))).....(.....)...").unwrap();
-        assert_eq!(registry.classify(&s1), vec![1]);
-        let s2 = DotBracketVec::try_from(".((((....)))).((((((....))))))...............").unwrap();
+        assert_eq!(registry.classify(&s1), vec![1, 2]);
+        let s2 = DotBracketVec::try_from(".((((....)))).((((((....)))))).....(.....)...").unwrap();
         assert_eq!(registry.classify(&s2), vec![2]);
         let s3 = DotBracketVec::try_from(".((((....)))).((((........))))...............").unwrap();
         assert_eq!(registry.classify(&s3), vec![1, 2, 3]);
-
-        // Unknown structure: should return 0 ("Unassigned")
-        let s4 = DotBracketVec::try_from("..............").unwrap();
+        let s4 = DotBracketVec::try_from("..(((....)))..((((((....)))))).....(.....)...").unwrap();
         assert_eq!(registry.classify(&s4), vec![0]);
+        let s5 = DotBracketVec::try_from(".((((....)))).((((........))))").unwrap();
+        assert_eq!(registry.classify(&s5), vec![1, 2]);
+        let s6 = DotBracketVec::try_from("..............((((((....)))))).....(.....)...").unwrap();
+        assert_eq!(registry.classify(&s6), vec![4]);
 
         // Iteration test
         let all_names: Vec<_> = registry.iter().map(|(_, ms)| ms.name().to_string()).collect();
@@ -452,11 +437,36 @@ mod tests {
         assert!(all_names.contains(&"motif_name1".to_string()));
         assert!(all_names.contains(&"motif_name2".to_string()));
         assert!(all_names.contains(&"motif_name3".to_string()));
+        assert!(all_names.contains(&"motif_name4".to_string()));
     }
 
+    #[test]
+    fn test_registry_with_varied_distances() {
+        let energy_model = ViennaRNA::from_thermo_params(&RNA_TURNER_2004, 37.0);
+        let seq = NucleotideVec::try_from("UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC").unwrap();
+        let mut registry = MotifRegistry::from((&seq, &energy_model));
 
+        let input = r#"UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC
+                              >motif_exact 0
+                              x((((xxxx))))x((((xxxxxxxx))))xxxxxxxx.......
+                              >motif_dist1 1
+                              x((((xxxx))))x((((xxxxxxxx))))xxxxxxxx.......
+                              >motif_dist2 2
+                              x((((xxxx))))x((((xxxxxxxx))))xxxxxxxx.......
+                              >motif_dist3 3
+                              x((((xxxx))))x((((xxxxxxxx))))xxxxxxxx.......
+                              >motif_dist4 4
+                              x((((xxxx))))x((((xxxxxxxx))))xxxxxxxx......."#.as_bytes();
 
+        registry.insert_from_reader(Cursor::new(input), "test").unwrap();
 
+        let exact_structure_dist00 = DotBracketVec::try_from(".((((....)))).((((........))))...............").unwrap();
+        assert_eq!(registry.classify(&exact_structure_dist00), vec![1, 2, 3, 4, 5]);
+        let faulty_structure_dist3 = DotBracketVec::try_from(".((((....)))).(((((......)))))...(........)..").unwrap();
+        assert_eq!(registry.classify(&faulty_structure_dist3), vec![4, 5]);
+        let faulty_structure_dist5 = DotBracketVec::try_from(".((((....)))).((((((....))))))...(........)..").unwrap();
+        assert_eq!(registry.classify(&faulty_structure_dist5), vec![0]);
 
+    }
 }
 
