@@ -138,7 +138,7 @@ impl<'a, E: EnergyModel, K: RateModel> LoopStructureSSA<'a, E, K> {
     pub fn co_simulate<R, F>(
         &mut self,
         rng: &mut R,
-        times: Vec<f64>, 
+        times: Vec<f64>, //times vector as input (cumulative times)
         mut callback: F,
     )
     where
@@ -147,10 +147,11 @@ impl<'a, E: EnergyModel, K: RateModel> LoopStructureSSA<'a, E, K> {
     {
         let mut t = 0.0;
 
+        //iterate over times vector (simulate for t=time)
         for time in &times {
-
             while t < *time {
                 let rsum = self.rate_tree.total_rate();
+                // if flux is zero, forward time and skip simulation
                 if rsum == 0.0 {
                     t = *time; 
                     break;
@@ -170,7 +171,8 @@ impl<'a, E: EnergyModel, K: RateModel> LoopStructureSSA<'a, E, K> {
                 if !callback(t, tinc, rsum, &self.loopstructure) {
                     break;
                 }
-
+                
+                //Update t
                 t += tinc;
 
                 let threshold = rng.random::<f64>() * rsum;
@@ -214,9 +216,8 @@ impl<'a, E: EnergyModel, K: RateModel> LoopStructureSSA<'a, E, K> {
             }
 
             //apply extension move
-            
             if t < *times.last().unwrap() {
-                let (loop_neighbors, pair_changes) = self.loopstructure.apply_ext_move();
+                let (loop_neighbors, pair_changes) = self.loopstructure.apply_ext_move(); //updates energy and neighbors of exterior loop 
                 self.update_loop_reactions(loop_neighbors);
                 self.update_pair_reactions(pair_changes);
             }
