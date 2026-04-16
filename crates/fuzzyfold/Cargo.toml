@@ -53,6 +53,9 @@ path = "src/bin/ff-accessibility.rs"
 name = "ff-co_structure_count"
 path = "src/bin/ff-co_structure_count.rs"
 
+[[bin]]
+name = "ff-count_to_macrostates"
+path = "src/bin/ff-count_to_macrostates.rs"
 
 [dependencies]
 ff_structure.workspace = true
