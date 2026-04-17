@@ -159,9 +159,9 @@ fn main() -> Result<()> {
     let mut dbvs = Vec::new();
 
     for row in &structures {
-        let mut dbv = DotBracketVec::from(&row.structure);
+        let dbv = DotBracketVec::from(&row.structure);
         if dbv.is_empty() {
-            dbv = DotBracketVec::try_from(".")?;
+            continue;
         }
         dbvs.push(dbv);
     }
