@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 
-use ff_structure::{PairList, PairTable};
+use ff_structure::{Pair, PairList};
 use ff_structure::DotBracketVec;
 
 use fuzzyfold::input_parsers::read_fasta_like_input;
@@ -49,6 +49,26 @@ struct Row {
     count: usize,
 }
 
+
+fn parse_pairlist(s: &str) -> Result<PairList> {
+
+    let mut pl = PairList::new();
+    let s = s.trim();
+    if s.is_empty() {
+        return Ok(pl);
+    }
+
+    for part in s.split("),(") {
+        let part = part.trim().trim_matches('(').trim_matches(')');
+        let mut nums = part.splitn(2, ',');
+        let i: u16 = nums.next().context("missing i in pair")?.trim().parse()?;
+        let j: u16 = nums.next().context("missing j in pair")?.trim().parse()?;
+        pl.insert(Pair::new(i, j));
+    }
+    Ok(pl)
+}
+
+
 fn parse_csv(path: &PathBuf) -> Result<Vec<Row>> {
     
     let file = File::open(path).with_context(|| format!("Could not open CSV file!"))?;
@@ -67,18 +87,17 @@ fn parse_csv(path: &PathBuf) -> Result<Vec<Row>> {
         if line.is_empty() {
             continue;
         }
+        let last_comma = line.rfind(',').context("No comma found in line")?;
+        let count: usize = line[last_comma + 1..].trim().parse().with_context(|| format!("Could not parse count!"))?;
+        let rest = &line[..last_comma];
 
-        let parts: Vec<&str> = line.splitn(4, ',').collect();
-        if parts.len() < 4 {
-            continue;
-        }
-
-        let timepoint_idx: usize = parts[0].trim().parse().with_context(|| format!("Could not parse timepoint_idx!"))?;
-        let time: f64 = parts[1].trim().parse().with_context(|| format!("Could not parse time!"))?;
-        let dbv = DotBracketVec::try_from(parts[2].trim()).with_context(|| "Invalid dot-bracket")?;
-        let pt = PairTable::try_from(&dbv)?;
-        let structure = PairList::from(&pt);
-        let count: usize = parts[3].trim().parse().with_context(|| format!("Could not parse count!"))?;
+        let mut iter = rest.splitn(3, ',');
+   
+        let timepoint_idx: usize = iter.next().context("Missing timepoint idx")?.trim().parse().with_context(|| format!("Could not parse timepoint_idx!"))?;
+        let time: f64 = iter.next().context("Missing time")?.trim().parse().with_context(|| format!("Could not parse time!"))?;
+        let structure_str = iter.next().context("Missing structure")?.trim();
+        let structure = parse_pairlist(structure_str)?; 
+        
 
         rows.push(Row {timepoint_idx, time, structure, count})
 
