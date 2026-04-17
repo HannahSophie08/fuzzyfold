@@ -36,7 +36,12 @@ pub struct Cli {
     /// CSV file output from ff-co_structure_count
     #[arg(short, long, value_name = "COUNTS")]
     csv: PathBuf,
- 
+    
+    // number of simulatios 
+    #[arg(short, long, default_value_t = 0)]
+    num_sims: usize,
+    
+
     /// Output directory for macrostates
     #[arg(short, long, default_value = "macrostates")]
     output_dir: PathBuf,
@@ -113,7 +118,12 @@ fn find_most_frequent_structure (rows: &[Row]) -> Vec<&Row> {
 
     let mut best: HashMap<usize, &Row> = HashMap::new();
     for row in rows {
-        best.entry(row.timepoint_idx).or_insert(row);
+        match best.get(&row.timepoint_idx) {
+            Some(existing) if existing.count >= row.count => {}
+            _ => {
+                best.insert(row.timepoint_idx, row);
+            }
+        }
     }
 
     let mut sorted_keys: Vec<usize> = best.keys().cloned().collect();
@@ -124,6 +134,32 @@ fn find_most_frequent_structure (rows: &[Row]) -> Vec<&Row> {
     
 }
 
+
+fn find_most_frequent_structure_with_threshold (rows: &[Row], num_sims: usize) -> Vec<&Row> {
+
+    let mut best: HashMap<usize, &Row> = HashMap::new();
+    let threshold = num_sims / 20;
+
+    for row in rows {
+        if row.count < threshold {
+            continue;
+        }
+
+        match best.get(&row.timepoint_idx) {
+            Some(existing) if existing.count >= row.count => {}
+            _ => {
+                best.insert(row.timepoint_idx, row);
+            }
+        }
+    }
+
+    let mut sorted_keys: Vec<usize> = best.keys().cloned().collect();
+    sorted_keys.sort();
+
+    sorted_keys.iter().map(|k| best[k]).collect()
+    
+    
+}
 
 fn remove_duplicates<'a>(rows: &[&'a Row]) -> Vec<&'a Row> {
 
@@ -152,7 +188,11 @@ fn main() -> Result<()> {
 
     let rows = parse_csv(&cli.csv)?;
 
-    let most_frequent = find_most_frequent_structure(&rows);
+    let most_frequent = if cli.num_sims != 0 {
+        find_most_frequent_structure_with_threshold(&rows, cli.num_sims.clone())
+    } else {
+        find_most_frequent_structure(&rows)
+    };
 
     let structures = remove_duplicates(&most_frequent);
 
