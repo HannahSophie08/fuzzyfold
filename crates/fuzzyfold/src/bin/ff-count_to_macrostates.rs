@@ -156,30 +156,27 @@ fn main() -> Result<()> {
 
     let structures = remove_duplicates(&most_frequent);
 
-    let mut dbvs = Vec::new();
-
+    let mut output: Vec<(&Row, DotBracketVec)> = Vec::new();
     for row in &structures {
         let dbv = DotBracketVec::from(&row.structure);
-        if dbv.is_empty() {
-            continue;
+        if !dbv.is_empty() {
+            output.push((row, dbv));
         }
-        dbvs.push(dbv);
     }
 
     std::fs::create_dir_all(&cli.output_dir)?;
 
-    for (macro_idx, row) in structures.iter().enumerate() {
-        let dbv = &dbvs[macro_idx];
+    for (macro_idx, (row, dbv)) in output.iter().enumerate() {
         let filename = cli.output_dir.join(format!("macrostate_{}.txt", macro_idx + 1));
         let file = File::create(&filename)?;
         let mut w = BufWriter::new(file);
 
-        writeln!(w, ">Macrostate_{}", macro_idx+1)?;
+        writeln!(w, ">Macrostate_{}", macro_idx + 1)?;
         writeln!(w, "{}", sequence)?;
         writeln!(w, "{}", dbv)?;
     }
 
-    println!("Wrote {} mscrostate files to {:?}", structures.len(), cli.output_dir);
+    println!("Wrote {} macrostate files to {:?}", output.len(), cli.output_dir);
 
     Ok(())
 
