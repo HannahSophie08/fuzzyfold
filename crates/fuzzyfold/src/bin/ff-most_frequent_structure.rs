@@ -7,6 +7,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 
 use ff_structure::{Pair, PairList};
+use ff_structure::DotBracket;
 use ff_structure::DotBracketVec;
 
 use fuzzyfold::input_parsers::read_fasta_like_input;
@@ -166,7 +167,13 @@ fn main() -> Result<()> {
 
     let (best_structure, best_count) = find_most_frequent_structure(&rows);
 
-    let dbv = DotBracketVec::from(&best_structure);
+    let mut dbv = DotBracketVec::from(&best_structure);
+
+    let sequence_len = sequence.len();
+
+    if dbv.len() < sequence_len {
+        dbv.0.resize(sequence_len, DotBracket::Unpaired);
+    }
 
     std::fs::create_dir_all(&cli.output_dir)?;
 
