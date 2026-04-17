@@ -161,7 +161,7 @@ fn main() -> Result<()> {
     for row in &structures {
         let mut dbv = DotBracketVec::from(&row.structure);
         if dbv.is_empty() {
-            let dbv = DotBracketVec::try_from(".")?;
+            dbv = DotBracketVec::try_from(".")?;
         }
         dbvs.push(dbv);
     }
