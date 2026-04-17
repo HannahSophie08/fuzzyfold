@@ -90,6 +90,7 @@ fn find_most_frequent_structure (rows: &[Row]) -> Vec<&Row> {
     
 }
 
+
 fn remove_duplicates<'a>(rows: &[&'a Row]) -> Vec<&'a Row> {
 
     let mut seen: Vec<&PairList> = Vec::new();
@@ -105,24 +106,6 @@ fn remove_duplicates<'a>(rows: &[&'a Row]) -> Vec<&'a Row> {
     unique
 
 }
-
-fn pairlist_to_dbv(pairlist: &PairList, sequence_len: usize) -> DotBracketVec {
-
-    let mut dbv = vec!['.'; sequence_len];
-
-    for(i, j) in pairlist.iter() {
-        let i = *i as usize;
-        let j = *j as usize;
-        if i >= 1 && j >= 1 && i <= sequence_len && j <= sequence_len {
-            dbv[i - 1] = '(';
-            dbv[j - 1] = ')';
-        }
-    }
-    
-    let dbv_string: String = dbv.into_iter().collect();
-    DotBracketVec::try_from(dbv_string.as_str()).expect("Invalid dot-bracket string")
-}
-
 
 
 fn main() -> Result<()> {
@@ -142,7 +125,8 @@ fn main() -> Result<()> {
     let mut dbvs = Vec::new();
 
     for row in &structures {
-        dbvs.push(pairlist_to_dbv(&row.structure, sequence_len));
+        let dbv = DotBracketVec::from(&row.structure);
+        dbvs.push(dbv);
     }
 
     std::fs::create_dir_all(&cli.output_dir)?;
