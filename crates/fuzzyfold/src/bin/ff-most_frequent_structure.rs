@@ -143,6 +143,13 @@ fn find_most_frequent_structure (rows: &[Row]) -> (PairList, usize) {
     
     let (best_structure, best_count) = counter.max_structure().unwrap();
 
+    if best_structure.is_empty() {
+        let best_structure = best_structure.clone();
+        counter.counts.remove(&best_structure);
+        let (new_best_structure, new_best_count) = counter.max_structure().unwrap();
+        return (new_best_structure.clone(), *new_best_count);
+    }
+
     return (best_structure.clone(), *best_count)
 }
 
