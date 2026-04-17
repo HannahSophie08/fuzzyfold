@@ -3,6 +3,7 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::convert::TryFrom;
 
+use crate::PairList;
 use crate::PairTable;
 use crate::MultiPairTable;
 use crate::MultiStruct;
@@ -154,6 +155,20 @@ impl From<&StrandPairTable> for DotBracketVec {
     }
 }
 
+// doesn't include the exterior loop only the paired posititons 
+impl From<&PairList> for DotBracketVec {
+    fn from(pl: &PairList) -> Self {
+        let len = pl.iter().map(|&(_, j)|j as usize + 1).max().unwrap_or(0);
+        let mut result: Vec<DotBracket> = vec![DotBracket::Unpaired; len];
+        for &(i, j) in pl.iter() {
+           result[i as usize] = DotBracket::Open;
+           result[j as usize] = DotBracket::Close;
+        }
+        DotBracketVec(result)
+    }
+}
+
+
 impl fmt::Display for DotBracketVec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for db in &self.0 {
@@ -217,6 +232,22 @@ mod tests {
         let pt = StrandPairTable::try_from("((..)+)").unwrap();
         let dbv = DotBracketVec::from(&pt);
         assert_eq!(format!("{}", dbv), "((..)+)+");
+    }
+
+    #[test]
+    fn test_dot_bracket_vec_from__pair_list() {
+        let pt = PairTable::try_from("((..))").unwrap();
+        let pl = PairList::from(&pt);
+        let dbv = DotBracketVec::from(&pl);
+        assert_eq!(format!("{}", dbv), "((..))");
+    }
+
+    #[test]
+    fn test_dot_bracket_vec_from__pair_list_exterior_loop() {
+        let pt = PairTable::try_from("((..))...").unwrap();
+        let pl = PairList::from(&pt);
+        let dbv = DotBracketVec::from(&pl);
+        assert_eq!(format!("{}", dbv), "((..))");
     }
 
 }
