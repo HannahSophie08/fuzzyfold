@@ -1,3 +1,18 @@
+//! Converts output from ff-co_stucture_count into macrostates.
+//! Selects the most frequent structure for each timepoint and checks
+//! whether each structure is unique. If there are structures more than 
+//! once only the first is kept. Then the pairlists are converted to 
+//! dotbracket vectors and each structure is safed in a seperate file with
+//! the sequence and a header.
+//! 
+//! Input: csv file from ff-co_structure_count and fasta file that was used as
+//! input for ff-co_structure_count. Optional: path to directory, where macrostate
+//! files are stored. 
+//! 
+//! Output: macrostate files (header: macrostate index, sequence, structure in dbv)
+//! 
+
+
 use clap::Parser;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
