@@ -1,12 +1,13 @@
 use clap::Parser;
 use anyhow::{Context, Result};
 use clap::builder::Str;
+use fuzzyfold::structure;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 
-use ff_structure::{Pair, PairList};
+use ff_structure::{Pair, PairList, PairTable};
 use ff_structure::DotBracket;
 use ff_structure::DotBracketVec;
 
@@ -27,6 +28,9 @@ pub struct Cli {
     /// Output directory for macrostates
     #[arg(short, long, default_value = "macrostates")]
     output_dir: PathBuf,
+
+    #[arg(long, value_name = "FILE", num_args = 1.., required = false)]
+    macrostates: Vec<PathBuf>,
 }
 
 struct Row {
@@ -127,14 +131,43 @@ fn parse_csv(path: &PathBuf) -> Result<Vec<Row>> {
 
 }
 
+fn parse_macrostate_file(path: &PathBuf) -> Result<Vec<PairList>> {
+    
+    let file = File::open(path).with_context(|| format!("Could not open macroste file: {:?}!", path))?;
+    let reader = BufReader::new(file);
+    let mut structures = Vec::new();
 
+    let mut lines = reader.lines().peekable();
+    while lines.peek().is_some() {
+        let header = lines.next().unwrap()?;
+        if header.trim().is_empty() {
+            continue;
+        }
+        lines.next().context("Macrostate file is missung sequence line")??;
+        let db_line = lines.next().context("Missing structure")??.trim().to_string();
+        let db = DotBracketVec(
+            db_line.chars()
+                .map(DotBracket::try_from)
+                .collect::<Result<Vec<_>, _>>()
+                .with_context(|| format!("Could not parse dot-bracket in {:?}: {}", path, db_line))?
+        );
+        let pair_table = PairTable::try_from(&db)?;
+        structures.push(PairList::from(&pair_table));
+    }
 
-fn find_most_frequent_structure (rows: &[Row]) -> (PairList, usize) {
+    anyhow::ensure!(!structures.is_empty(), "Macrostate file {:?} contains no entries", path);
+    Ok(structures)
+}
+
+fn find_most_frequent_structure (rows: &[Row], excluded: &[PairList]) -> (PairList, usize) {
 
     let mut counter = StructureCounter::new();
 
     
     for row in rows {
+        if excluded.iter().any(|e| e == &row.structure) {
+            continue;
+        }
         if counter.counts.contains_key(&row.structure) {
             counter.increase(row.structure.clone(), row.count)
         } else {
@@ -164,8 +197,12 @@ fn main() -> Result<()> {
     let (_header, sequence, _structure) = read_fasta_like_input(&cli.input)?;
 
     let rows = parse_csv(&cli.csv)?;
-
-    let (best_structure, best_count) = find_most_frequent_structure(&rows);
+    let mut excluded: Vec<PairList> = Vec::new();
+    for path in &cli.macrostates {
+        let structures = parse_macrostate_file(path)?;
+        excluded.extend(structures);
+    }
+    let (best_structure, best_count) = find_most_frequent_structure(&rows, &excluded);
 
     let mut dbv = DotBracketVec::from(&best_structure);
 
