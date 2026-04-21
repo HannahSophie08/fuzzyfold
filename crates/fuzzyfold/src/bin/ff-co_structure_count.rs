@@ -1,10 +1,10 @@
 //! A command line tool to run multiple co-transcriptional folding simulations and 
-//! identify the structures that appear most often throughout the simulation at defined 
+//! identify the structures that appear most frequently throughout the simulation at defined 
 //! time points. Writes all recorded structures and their count to an output file.
 //! 
 //! # Input: 
 //! - '-- file_name/file_path'
-//! - File containg sequence and initial structure
+//! - File containing sequence and initial structure
 //! => initial structure defines start length
 //! => if initial structure is not given or has full sequence length start length is 1
 //!
@@ -27,6 +27,7 @@
 //! but don't take the unpaired exterior loop into account. This allows to assign structures at different 
 //! transcript lengths that only differ by the exterior loop to the same macrostate.
 
+use fuzzyfold::structure;
 use rayon::prelude::*;
 use rand::rng;
 use clap::Parser;
@@ -81,7 +82,7 @@ pub struct Cli {
 
 /// Vector to store structures in a single simulation run 
 struct SimulationRun  {
-    structures: Vec<PairList>, 
+    structures: Vec<(DotBracketVec, usize)>, 
 }
 
 impl SimulationRun {
@@ -94,58 +95,45 @@ impl SimulationRun {
     }
 
     /// Insert a new structure
-    pub fn insert(&mut self, pairlist: PairList) {
-        self.structures.push(pairlist);
+    pub fn insert(&mut self, structure: DotBracketVec, seq_len: usize) {
+        self.structures.push((structure, seq_len));
     }
 
 }
 /// Vector that combines multiple simulation runs, compares the structures and counts
 /// how often each structure occurs across the simulations per time point 
 struct CombinedSimulations {
-    pub counts: Vec<HashMap<PairList, usize>>,
+    pub counts: Vec<HashMap<PairList, (usize, DotBracketVec, usize)>>,
 }
 
+
 impl CombinedSimulations {
-
-    /// generate new map
     pub fn new(num_timepoints: usize) -> Self {
-        Self {
-            counts: vec![HashMap::new(); num_timepoints],  
-        }
+        Self { counts: vec![HashMap::new(); num_timepoints] }
     }
 
-    /// add a simulation
     pub fn add(&mut self, run: SimulationRun) {
-
-        // check that length of the structures selected matches number of timepoints 
         assert_eq!(run.structures.len(), self.counts.len(), "Number of timepoints doesn't match");
-        
-        for t_idx in 0..run.structures.len() {
-            let structure = run.structures[t_idx].clone();
-            let timepoint = &mut self.counts[t_idx]; //timepoint that the structure was collected
-            
-            if let Some(count) = timepoint.get_mut(&structure) { //if structure already exists, add 1 to count
-                *count += 1;
-            } else { // new structure 
-                timepoint.insert(structure, 1);
-            }
+        for (t_idx, (structure, seq_len)) in run.structures.into_iter().enumerate() {
+            let pt = PairTable::try_from(&structure).unwrap();
+            let key = PairList::from(&pt);
+            self.counts[t_idx]
+                .entry(key)
+                .and_modify(|(count, _, _)| *count += 1)
+                .or_insert((1, structure, seq_len));
         }
     }
 
-    /// sort by count for each timepoint 
-    pub fn sort(&self, t_idx:usize) -> Vec<(&PairList, usize)> {
-        
-        let mut entries: Vec<(&PairList, usize)> = self.counts[t_idx]  //convert into vector
+    pub fn sort(&self, t_idx: usize) -> Vec<(&PairList, usize, &DotBracketVec, usize)> {
+        let mut entries: Vec<(&PairList, usize, &DotBracketVec, usize)> = self.counts[t_idx]
             .iter()
-            .map(|(structure, count) | (structure, *count))
+            .map(|(pl, (count, dbv, seq_len))| (pl, *count, dbv, *seq_len))
             .collect();
-
-        entries.sort_by(|a, b| b.1.cmp(&a.1)); // sort in descending order
-        return entries;
+        entries.sort_by(|a, b| b.1.cmp(&a.1));
+        entries
     }
 
- }
-
+}
 
 /// vector of time points at which structures are recorded during simulation
 fn build_timeline (
@@ -235,12 +223,12 @@ fn run_simulation(
             while t_idx < timeline.len() && t + tinc >= timeline[t_idx] {
                 
                 let structure = DotBracketVec::from(ls);
+                let seq_len = structure.len();
                 let pt = PairTable::try_from(&structure).unwrap();
-                run.insert(PairList::from(&pt));
-            
+                run.insert(structure, seq_len);
                 t_idx += 1;
-                }
-        true
+            }
+            true
         }
     );
 
@@ -254,23 +242,24 @@ fn run_simulation(
 /// writes the by count sorted results into an csv output file
 fn write_output_file(
     path: &PathBuf,
+    sequence: &[Base],
     combined: &CombinedSimulations,
     timeline: &[f64],
-    ) -> Result<()> {
-    
-    // open a new file 
+    emodel: &impl EnergyModel,
+) -> Result<()> {
     let file = File::create(path)?;
     let mut w = BufWriter::new(file);
 
-    // column names
-    writeln!(w, "timepoint_idx, time, structure, count")?;
-    
+    writeln!(w, "timepoint_idx, time, structure, count, energy")?;
+
     for (t_idx, &time) in timeline.iter().enumerate() {
-        for (pairlist, count) in combined.sort(t_idx) {
-            writeln!(w, "{}, {:.6}, {}, {:.6}", t_idx, time, pairlist, count)?;
+        for (_pairlist, count, dbv, seq_len) in combined.sort(t_idx) {
+            let pt = PairTable::try_from(dbv)?;
+            let energy = emodel.energy_of_structure(&sequence[..seq_len], &pt) as f64 / 100.0;
+            writeln!(w, "{}, {:.6}, {}, {}, {:.2}", t_idx, time, dbv, count, energy)?;
         }
     }
-    Ok(()) 
+    Ok(())
 }
 
 
@@ -338,8 +327,9 @@ fn main() -> Result<()> {
         }
     }
 
+    let emodel = cli.energy.build_model();
     // sort results and write them to csv file
-    let _ = write_output_file(&cli.output, &combined, &timeline);
+    let _ = write_output_file(&cli.output, &sequence, &combined, &timeline, &emodel);
 
 
     Ok(())
