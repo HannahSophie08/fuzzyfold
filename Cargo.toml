@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*"]
+members = ["crates/*", "ff-Alu_analysis"]
 default-members = ["crates/fuzzyfold"]
 resolver = "3"
 
