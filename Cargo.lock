@@ -471,8 +471,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "ff-Alu_analysis"
+name = "ff-alu_analysis"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "colored",
+ "env_logger",
+ "ff_energy",
+ "ff_kinetics",
+ "ff_structure",
+ "indicatif",
+ "log",
+ "paste",
+ "plotters",
+ "rand",
+ "rayon",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "ff_energy"

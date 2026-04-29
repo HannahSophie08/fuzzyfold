@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::path::Path;
 use std::path::PathBuf;
 
+use rand::seq;
 use rayon::prelude::*;
 use rand::rng;
 use colored::*;
@@ -26,10 +27,10 @@ use ff_kinetics::timeline::Timeline;
 use ff_kinetics::timeline_plotting::plot_occupancy_over_time;
 use ff_kinetics::MacrostateRegistry;
 
-use fuzzyfold::input_parsers::read_eval_input;
-use fuzzyfold::energy_parsers::EnergyModelArguments;
-use fuzzyfold::kinetics_parsers::RateModelArguments;
-use fuzzyfold::kinetics_parsers::TimelineParameters;
+use ff_alu_analysis::input_parsers::read_eval_input;
+use ff_alu_analysis::energy_parsers::EnergyModelArguments;
+use ff_alu_analysis::kinetics_parsers::RateModelArguments;
+use ff_alu_analysis::kinetics_parsers::TimelineParameters;
 
 #[derive(Debug, Parser)]
 #[command(version, about = "Stochastically simulated nucleic acid ensembles over time.")]
@@ -56,8 +57,31 @@ pub struct Cli {
     #[command(flatten, next_help_heading = "Kinetic model parameters")]
     kinetics: RateModelArguments,
 }
-   
 
+pub struct Alu {
+    name: String,
+    start: usize,
+    end: usize,
+    orientation: bool, // inverted (?)
+}
+
+impl Alu {
+
+    fn new(name: String, start: usize, end: usize, orientation: bool) -> Self{
+        Self {
+            name,
+            start,
+            end,
+            orientation,
+        }
+    }
+}
+
+
+pub struct pair_record {
+    alus: Vec<Alu>,
+    matrix: 
+}
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -79,73 +103,15 @@ fn main() -> Result<()> {
     println!("Output after {} simulations: \n - {:?}\n - {:?}\n - {:?}",
         cli.num_sims, cli.kinetics, cli.simulation, cli.energy);
 
-    let times = cli.simulation.get_output_times();
-    let mut macrostates = MacrostateRegistry::from((sequence.clone(), emodel.clone()));
-    macrostates.insert_files(&cli.macrostates)?;
-    // Verbose Output
-    println!("{:>4} {:<10} {} {:>5} {:>8}",
-        "ID",
-        "Macrostate".cyan(), format!("{}", sequence).yellow(), "Size", "Energy");
-    for (id, m) in macrostates.iter() {
-        if m.name() == "Unassigned" {
-            println!("{:4} {:<10}", 0, m.name());
-            continue
-        }
-        println!("{:4} {:<10} {:<} {:>5} {:>8.2}",
-            id, 
-            m.name(),
-            m.get_lowest_microstate().unwrap(),
-            m.len(),
-            m.ensemble_energy().unwrap());
-    }
-    let shared_macrostates = Arc::new(macrostates);
+    let times = cli.simulation.get_output_times(&sequence, &structure);
+    
 
+    // Output paths 
     let tln_path = cli.output.with_extension("tln");
     let svg_path = cli.output.with_extension("svg");
     let nxy_path = cli.output.with_extension("nxy");
 
-    // If timeline.json exists, reload instead of starting empty
-    let mut master = 
-        if Path::new(&tln_path).exists() {
-            println!("Loading existing timeline from: {}", tln_path.display());
-            Timeline::from_file(&tln_path, &times, Arc::clone(&shared_macrostates))?
-        } else {
-            println!("A new timeline file will be created: {}", tln_path.display());
-            Timeline::new(&times, Arc::clone(&shared_macrostates))
-        };
-
-    let timelines: Vec<_> =
-        match (rmodel.k3ws().is_some(), rmodel.k4ws().is_some()) {
-            (false, false) => {
-                let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, NoShift))
-                    .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_timecourse(moves, rmodel, cli.simulation.t_end, cli.num_sims as u64,
-                    Arc::clone(&shared_macrostates), &times).collect()
-            },
-            (true, false) => {
-                let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, ThreeWayOnly))
-                    .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_timecourse(moves, rmodel, cli.simulation.t_end, cli.num_sims as u64,
-                    Arc::clone(&shared_macrostates), &times).collect()
-            },
-            (false, true) => {
-                let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, FourWayOnly))
-                    .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_timecourse(moves, rmodel, cli.simulation.t_end, cli.num_sims as u64,
-                    Arc::clone(&shared_macrostates), &times).collect()
-            },
-            (true, true) => {
-                let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, ThreeAndFour))
-                    .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_timecourse(moves, rmodel, cli.simulation.t_end, cli.num_sims as u64,
-                    Arc::clone(&shared_macrostates), &times).collect()
-            },
-        };
-
-    for timeline in timelines {
-        master.merge(timeline);
-    }
-
+    
     println!("{}", "Finished simulations!".red());
 
     // save / print / plot.
@@ -166,7 +132,7 @@ fn main() -> Result<()> {
 fn run_timecourse<W, K, E>(
     moves: W,
     rmodel: K,
-    t_end: f64,
+    simulation_times: &[f64],
     num_sims: u64,
     registry: Arc<MacrostateRegistry<E>>,
     times: &[f64],
@@ -176,7 +142,7 @@ where
     K: RateModel + Clone + Send + Sync,
     E: EnergyModel + Send + Sync,
     SSA<W, K>: From<(W, K)>,
-{
+{   
     let pb = ProgressBar::new(num_sims);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -184,6 +150,39 @@ where
         .unwrap()
         .progress_chars("#>-"),
     );
+
+    if simulation_times.len() > 1 { // Cotranscriptional simulation 
+
+        (0..num_sims)
+            .into_par_iter()
+            .map_init(
+                move || pb.clone(), // each thread gets a clone
+                move |pb, _| {
+
+                    //let registry = Arc::clone(&registry);
+                    //let mut timeline = Timeline::new(times, registry);
+
+                    let mut simulator = SSA::from((moves.clone(), rmodel.clone()));
+                    let mut t_idx = 0;
+                    simulator.co_simulate(
+                        &mut rng(),
+                        simulation_times,
+                        |t, tinc, _, w| {
+                            while t_idx < times.len() && t + tinc >= times[t_idx] {
+                                let structure = w.current_structure();
+                                //timeline.assign_structure(t_idx, &structure);
+                                t_idx += 1;
+                            }
+                            true
+                        },
+                    );
+
+                    pb.inc(1);
+                    timeline
+                },
+            )
+    }
+    
 
     (0..num_sims)
         .into_par_iter()
