@@ -11,6 +11,11 @@ categories.workspace = true
 name = "ff-interactions"
 path = "src/bin/ff-interactions.rs"
 
+[[bin]]
+name = "ff-plot_interactions"
+path = "src/bin/ff-plot_interactions.rs"
+
+
 
 [dependencies]
 ff_structure.workspace = true

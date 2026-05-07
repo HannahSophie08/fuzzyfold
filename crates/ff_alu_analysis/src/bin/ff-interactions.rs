@@ -1,73 +1,3 @@
-//! Stochastic folding simulator 
-//! 
-//! This binary performs stochastic folding simulations both at full sequence length and 
-//! cotrnacriptional, running multiple simulations in parallel and merging them into a master timeline. 
-//! This timeline is used to produce an occupancy plot. The plot shows the occupancy of predefined 
-//! macrostates in average over time. 
-//! 
-//! Mode: 
-//! Full length simulation: give structure of full sequence length 
-//! Cotranscriptonal simulation: give no structure or structure shorter than sequence length
-//! 
-//! --- Full length simulation --- 
-//! 
-//! Parameters:
-//!  
-//! - t-end: total simulationt time 
-//! - t-sep: last timepoint on linear scale (timepoint where linear scale in occupany plot switches
-//! to logarithmic scale and seperator is placed)
-//! - t-lin: timepoints on linear time scale [0...t-sep]
-//! - t-log: time points on logarithmic timescale [t-sep...t-log]
-//! - num-sims: number of simulations performed
-//! - k0: kinetic rate constant 
-//! 
-//! Input
-//! - user has to give structure and t-sep
-//! - t-lin and t-log are optional (default: 100)
-//! - num-sim optional (default: 1)
-//! 
-//! --- Cotranscriptional simulation ---
-//! 
-//! Parameters
-//!  
-//! - t-ext: extension time (simulation time per transcript length)
-//! - t-end: time of postranscriptional simulation
-//! - t-sep: last timepoint on linear scale (timepoint where linear scale in occupany plot switches
-//! to logarithmic scale and seperator is placed)
-//! - t-lin: recorded time steps per transcript length [without t-sep]/ timepoints recorded on linear timescale [with t-sep]
-//! - t-log: time points recorded for the posttranscriptional simulation on a logarithmic timescale [without t-sep]/
-//! timepoints recorded on logarithmic timescale [with t-sep]
-//! - num-sims: number of simulations performed
-//! - k0: kinetic rate constant 
-//! 
-//! Input & mode 
-//! - Cotranscriptional simulation 
-//! -> user has to give either no structure or a structure, that is shorter then full length, that 
-//!     will be used as the start structure and t-ext (extension time)
-//! - optional: t-sep 
-//! -> no t-sep: linear scale ends at end of transcription (t-lin: timepoints recorded per extension step;
-//! t-log: timepoints recorded during posttranscriptional folding)
-//! -> t-sep: linear timescale ends at t-sep (t-lin: timepoints recorded on linear timescale; t-log: time points recorded on
-//! logarithmic timescale)
-//! - optional: t-lin and t-log are optional (default: 100)
-//! - optional: num-sim (default: 1)
-//! 
-//! --- General ---
-//! 
-//! Output: 
-//! - user has to give output file
-//! - output formats: 
-//! -> svg (occupancy plot)
-//! -> nxy (occupancies)
-//! -. tln (timeline)
-//! 
-//! Load timeline:
-//! The 'tln' file can be used to accumulate results incrementially. Existing timlines can be reloaded and when a simulation is
-//! run with it, it gets updated. (Parameters have to be set to the same values!)
-//! 
-
-
-
 use std::fs;
 use std::fs::File;
 use std::io::Write;
@@ -105,6 +35,7 @@ use ff_alu_analysis::input_parsers::read_cotr_input;
 use ff_alu_analysis::energy_parsers::EnergyModelArguments;
 use ff_alu_analysis::kinetics_parsers::RateModelArguments;
 use ff_alu_analysis::kinetics_parsers::TimelineParameters;
+use ff_alu_analysis::category::Category;
 
 #[derive(Debug, Parser)]
 #[command(version, about = "Stochastically simulated nucleic acid ensembles over time.")]
@@ -132,22 +63,7 @@ pub struct Cli {
     kinetics: RateModelArguments,
 }
 
-impl Category {
-    fn to_key(&self) -> String {
-        match self {
-            Category::Within(a)      => format!("Within_{}", a + 1),
-            Category::Between(a, b)  => format!("Between_{}_{}", a + 1, b + 1),
-            Category::WithRest(a)    => format!("WithRest_{}", a + 1),
-        }
-    }
-}
 
-#[derive(Clone, Eq, Hash, PartialEq)]
-enum Category {
-    Within(usize),
-    Between(usize, usize),
-    WithRest(usize),
-}
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -228,11 +144,13 @@ fn main() -> Result<()> {
     let co_time = cli.simulation.t_ext.unwrap() * (sequence.len() - structure.len()) as f64;
     let post_time = co_time + cli.simulation.t_end;
 
-    plot_all_categorie_over_time(&times, &categories, co_time, post_time, svg_path.clone());
+   
 
     println!("{}", "Finished simulations!".red());
 
     let mut writer = BufWriter::new(File::create(csv_path.clone())?);
+    writeln!(writer, "# t_split={}", co_time)?;
+    writeln!(writer, "# t_end={}", post_time)?;
     write_categories(&mut writer, &times, &categories)?;
    
     
@@ -349,146 +267,6 @@ fn count_categories(structures: &[Vec<DotBracketVec>], regions: &Vec<(usize, usi
         result.push(percentages); 
     }
     Ok(result)
-}
-
-
-fn plot_all_categorie_over_time(
-    times: &[f64],
-    categories: &[FxHashMap<Category, f64>],
-    t_split: f64,
-    t_end: f64,
-    filename: impl AsRef<Path>,
-    ) {
-    
-    assert!(t_split > 0.0 && t_end > t_split, "Require 0 < t_split < t_end");
-
-    // Image size; tweak as you like
-    //let root = BitMapBackend::new(filename, (1024, 480)).into_drawing_area();
-    let root = SVGBackend::new(filename.as_ref(), (1024, 480)).into_drawing_area();
-    root.fill(&WHITE).unwrap();
-    root.titled("Category occupancy over time", ("sans-serif", 28)).unwrap();
-    root.draw_text(
-        "time",
-        &("sans-serif", 22).into_font().into_text_style(&root),
-        (496, 450),   // roughly centered at bottom
-    ).unwrap();
-
-
-    let eps = 1e-9; // epsilon for plot labels
-    // Split into two panels: 50% for linear (left), 50% for log (right)
-    let (left, right) = root.split_horizontally(512);
-
-    // ---- Left: linear panel ----
-    let mut chart_left = ChartBuilder::on(&left)
-        .caption("Linear plot", ("sans-serif", 18))
-        .margin(20)
-        .margin_top(40)
-        .margin_right(0)
-        .x_label_area_size(40)
-        .y_label_area_size(50)
-        .build_cartesian_2d(0.0..(t_split+eps), 0.0..1.0).unwrap();
-    chart_left
-        .configure_mesh()
-        //.x_desc("liner scale")
-        .y_desc("occupancy")
-        .x_labels(6)
-        .y_labels(10)
-        .light_line_style(RGBColor(220, 220, 220))
-        .axis_desc_style(("sans-serif", 22))
-        .label_style(("sans-serif", 18))
-        .draw()
-        .unwrap();
-
-    // draw separator at x = t_lin (right edge of this panel)
-    chart_left.draw_series(std::iter::once(PathElement::new(
-        vec![(t_split, 0.0), (t_split, 1.0)],
-        BLACK.mix(0.7),
-    ))).unwrap();
-
-    // ---- Right: log panel ----
-    let mut chart_right = ChartBuilder::on(&right)
-        .caption("Logarithmic plot", ("sans-serif", 18))
-        .margin(20)
-        .margin_top(40)
-        .margin_left(0)
-        .margin_right(40)
-        .x_label_area_size(40)
-        .y_label_area_size(0) // hide y labels on right
-        .build_cartesian_2d(((t_split - eps)..(t_end + eps)).log_scale(), 0.0..1.0)
-        .unwrap();
-
-    chart_right
-        .configure_mesh()
-        //.x_desc("log scale")
-        .x_labels(6)
-        .x_label_formatter(&|x| if *x < 0.01 {format!("{:.1e}", x)} else {format!("{}", x)})  // scientific notation
-        .y_labels(10) // hide y ticks on right
-        .light_line_style(RGBColor(220, 220, 220))
-        .label_style(("sans-serif", 18))
-        .draw().unwrap();
-
-    // repeat separator at x = t_lin (left edge of this panel)
-    chart_right.draw_series(std::iter::once(PathElement::new(
-        vec![(t_split, 0.0), (t_split, 1.0)],
-        BLACK.mix(0.7),
-    ))).unwrap();
-
-
-    
-    let mut all_categories: Vec<&Category> = categories.iter()
-        .flat_map(|m| m.keys())
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
-
-    all_categories.sort_by_key(|c| match c {
-        Category::Within(a) => (0, *a, 0),
-        Category::Between(a, b) => (1, *a, *b),
-        Category::WithRest(a) => (2, *a, 0),
-    });
-
-
-    // Find global Y max for normalization
-    for (i, category) in all_categories.iter().enumerate() {
-        let color = Palette99::pick(i).mix(0.9); // pick a distinct color
-
-        let series: Vec<(f64, f64)> = times.iter().zip(categories.iter())
-            .map(|(&t, map) | (t, map.get(category).copied().unwrap_or(0.0) / 100.0))
-            .collect();
-
-        let label = match category {
-            Category::Within(a) => format!("Within region {}", a + 1),
-            Category::Between(a, b) => format!("Between region {} and {}", a + 1, b + 1),
-            Category::WithRest(a) => format!("Region {} with rest", a + 1),
-        };
-
-
-        chart_left.draw_series(LineSeries::new(
-                series.iter().cloned().filter(|(t, _)| *t <= t_split + eps),
-                color.stroke_width(2),
-        )).unwrap();
-
-
-        chart_right.draw_series(LineSeries::new(
-            series.iter().cloned().filter(|(t, _)| *t >= t_split - eps),
-            color.stroke_width(2),
-        )).unwrap()
-            .label(label)   // <-- label for legend
-            .legend(move |(x, y)| 
-                PathElement::new(vec![(x, y), (x + 20, y)], color.stroke_width(2))
-            );
-    }
-    
-    // after loop:
-    chart_right
-        .configure_series_labels()
-        .border_style(BLACK)
-        .background_style(WHITE.mix(0.8))
-        .position(SeriesLabelPosition::UpperRight)
-            .label_font(("sans-serif", 16).into_font())   // <-- legend font size
-        .draw().unwrap();
-    
-    root.present().unwrap(); // write the PNG
 }
 
 
