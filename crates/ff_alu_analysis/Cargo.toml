@@ -19,7 +19,9 @@ path = "src/bin/ff-plot_interactions.rs"
 name = "ff-categories"
 path = "src/bin/ff-categories.rs"
 
-
+[[bin]]
+name = "ff-subopt-categories"
+path = "src/bin/ff-subopt-categories.rs"
 
 [dependencies]
 ff_structure.workspace = true
