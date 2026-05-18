@@ -11,7 +11,6 @@ use plotters::style::Palette;
 use plotters::style::IntoFont;
 use plotters::style::Color;
 
-use fuzzyfold::input_parsers::read_fasta_like_input;
 use ff_structure::DotBracketVec;
 use ff_structure::PairList;
 use ff_structure::PairTable;
@@ -43,7 +42,10 @@ fn main() -> Result<()> {
     
     let cli = Cli::parse();
 
-    let (header, sequence, mut structure) = read_fasta_like_input(&cli.input)?;
+    let content = std::fs::read_to_string(&cli.input)?;
+    let mut lines = content.lines();
+    let _header = lines.next().unwrap();
+    let sequence = lines.next().unwrap().to_string();
 
     let regions: Vec<(usize, usize)> = cli.regions.iter()
     .map(|r| {
@@ -60,7 +62,7 @@ fn main() -> Result<()> {
     let mut all_categories: Vec<FxHashMap<Category, f64>> = Vec::new();
     let mut lengths: Vec<usize> = Vec::new();
 
-    for l in 1..sequence.len() {
+    for l in 1usize..sequence.len() {
         let subseq = sequence[..l];
 
         let structures = run_rnasubopt(subseq, cli.num_samples)?;
@@ -104,7 +106,11 @@ fn run_rnasubopt(sequence: &str, num_samples: usize) -> Result<Vec<DotBracketVec
     let structures = stdout
         .lines()
         .skip(2)
-        .map(|l| l.split_whitespace().next().unwrap().to_string())
+        .map(|l| {
+            let dot_bracket = l.split_whitespace().next().unwrap();
+            let pt = PairTable::try_from(dot_bracket).expect("invalid dot-bracket");
+            DotBracketVec::from(&pt)
+        })
         .collect();
 
     Ok(structures)
