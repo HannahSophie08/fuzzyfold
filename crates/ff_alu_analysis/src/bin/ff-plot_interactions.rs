@@ -7,12 +7,14 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use anyhow::Result;
+use anyhow::anyhow;
 use rustc_hash::FxHashMap;
 use plotters::prelude::*;
 use plotters::style::Palette;
 use plotters::style::IntoFont;
 use plotters::prelude::IntoLogRange;
 use plotters::style::Color;
+use plotters::prelude::Cartesian2d;
 
 
 use ff_alu_analysis::category::Category;
@@ -28,59 +30,110 @@ pub struct Cli {
     #[arg(short, long, value_name = "FILE")]
     output: PathBuf,
 
-    #[arg(long)]
-    t_split: f64,
-
-    #[arg(long, value_name = "NAME", num_args = 0..)]
+    #[arg(long, value_name = "NAME", num_args = 1..)]
     region_names: Vec<String>,
 
+    #[arg(long, value_name = "TIME", num_args = 1..)]
+    region_ends: Vec<f64>,
 }
 
 
 
 fn main() -> Result<()> {
-
     let cli = Cli::parse();
 
-    let (t_split, t_end, times, categories) = read_csv(&cli.input)?; 
-
+    let (times, categories, t_split, t_end) = read_csv(&cli.input)?;
 
     let all_categories_path = cli.output.with_extension("_all_categories.svg");
-    let between_categories_path =  cli.output.with_extension("between_categories.svg");
+    let between_categories_path = cli.output.with_extension("between_categories.svg");
 
-    plot_all_categorie_over_time(&times, &categories, t_split, t_end, all_categories_path.clone());
+    plot_all_categorie_over_time(
+        &times, &categories, t_split, t_end,
+        &cli.region_names, &cli.region_ends,
+        all_categories_path,
+    );
 
     let between_categories = renormalize_between(&categories);
-    plot_betweens(&times, &between_categories, t_split, t_end, between_categories_path.clone());
+    plot_betweens(
+        &times, &between_categories, t_split, t_end,
+        &cli.region_names, &cli.region_ends,
+        between_categories_path,
+    );
 
     Ok(())
 }
 
+fn region_name<'a>(names: &'a [String], idx: usize) -> String {
+    names.get(idx)
+        .cloned()
+        .unwrap_or_else(|| format!("region {}", idx + 1))
+}
 
-fn read_csv(path: &PathBuf) ->  Result<(f64, f64, Vec<f64>, Vec<FxHashMap<Category, f64>>)> {
+fn draw_region_ends(
+    chart: &mut ChartContext<SVGBackend, Cartesian2d<plotters::coord::types::RangedCoordf64, plotters::coord::types::RangedCoordf64>>,
+    region_ends: &[f64],
+    x_lo: f64,
+    x_hi: f64,
+) {
+    let dash_len = 0.04_f64;
+    let gap_len  = 0.02_f64;
 
+    for &t in region_ends {
+        if t < x_lo || t > x_hi { continue; }
+
+        let mut y = 0.0_f64;
+        while y < 1.0 {
+            let y_end = (y + dash_len).min(1.0);
+            chart.draw_series(std::iter::once(PathElement::new(
+                vec![(t, y), (t, y_end)],
+                BLACK.mix(0.5).stroke_width(1),
+            ))).unwrap();
+            y = y_end + gap_len;
+        }
+    }
+}
+
+
+fn read_csv(path: &PathBuf) -> Result<(Vec<f64>, Vec<FxHashMap<Category, f64>>, f64, f64)> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
 
-     // Read metadata lines
-    let t_split: f64 = lines.next().unwrap()?
-        .trim_start_matches("# t_split=")
-        .parse()?;
-    let t_end: f64 = lines.next().unwrap()?
-        .trim_start_matches("# t_end=")
-        .parse()?;
+    let mut t_split: Option<f64> = None;
+    let mut t_end: Option<f64> = None;
 
-    lines.next(); //skip header
+    // Parse comment header lines starting with '#'
+    loop {
+        let line = lines.next()
+            .ok_or_else(|| anyhow!("Unexpected end of file in header"))??;
+
+        if line.starts_with('#') {
+            let content = line.trim_start_matches('#').trim();
+            if let Some(val) = content.strip_prefix("t_split=") {
+                t_split = Some(val.trim().parse()
+                    .map_err(|_| anyhow!("Invalid t_split value: {}", val))?);
+            } else if let Some(val) = content.strip_prefix("t_end=") {
+                t_end = Some(val.trim().parse()
+                    .map_err(|_| anyhow!("Invalid t_end value: {}", val))?);
+            }
+        } else {
+            // This is the CSV header line ("time,category,value") — consume and break
+            break;
+        }
+    }
+
+    let t_split = t_split.ok_or_else(|| anyhow!("Missing # t_split=... in file header"))?;
+    let t_end   = t_end  .ok_or_else(|| anyhow!("Missing # t_end=...   in file header"))?;
+    lines.next(); // skip header
 
     let mut rows: Vec<(f64, Category, f64)> = Vec::new();
     for line in lines {
         let line = line?;
-       let mut parts = line.splitn(3, ',');
-        let time: f64 = parts.next().unwrap().parse()?;
-        let category = Category::from_key(parts.next().unwrap())?;
+        let mut parts = line.splitn(3, ',');
+        let time: f64  = parts.next().unwrap().parse()?;
+        let category   = Category::from_key(parts.next().unwrap())?;
         let value: f64 = parts.next().unwrap().parse()?;
-        rows.push((time, category, value)); 
+        rows.push((time, category, value));
     }
 
     let mut times: Vec<f64> = Vec::new();
@@ -94,8 +147,8 @@ fn read_csv(path: &PathBuf) ->  Result<(f64, f64, Vec<f64>, Vec<FxHashMap<Catego
         categories.last_mut().unwrap().insert(category, value);
     }
 
-    Ok((t_split, t_end, times, categories))
- }
+    Ok((times, categories, t_split, t_end))
+}
 
 
 fn plot_all_categorie_over_time(
@@ -103,6 +156,8 @@ fn plot_all_categorie_over_time(
     categories: &[FxHashMap<Category, f64>],
     t_split: f64,
     t_end: f64,
+    region_names: &[String],
+    region_ends: &[f64],
     filename: impl AsRef<Path>,
     ) {
     
@@ -118,7 +173,6 @@ fn plot_all_categorie_over_time(
         &("sans-serif", 22).into_font().into_text_style(&root),
         (496, 450),   // roughly centered at bottom
     ).unwrap();
-
 
     let eps = 1e-9; // epsilon for plot labels
     // Split into two panels: 50% for linear (left), 50% for log (right)
@@ -150,6 +204,8 @@ fn plot_all_categorie_over_time(
         vec![(t_split, 0.0), (t_split, 1.0)],
         BLACK.mix(0.7),
     ))).unwrap();
+
+    draw_region_ends(&mut chart_left, region_ends, 0.0, t_split);
 
     // ---- Right: log panel ----
     let mut chart_right = ChartBuilder::on(&right)
@@ -202,9 +258,9 @@ fn plot_all_categorie_over_time(
             .collect();
 
         let label = match category {
-            Category::Within(a) => format!("Within region {}", a + 1),
-            Category::Between(a, b) => format!("Between region {} and {}", a + 1, b + 1),
-            Category::WithRest(a) => format!("Region {} with rest", a + 1),
+            Category::Within(a)    => format!("Within {}", region_name(region_names, *a)),
+            Category::Between(a,b) => format!("Between {} and {}", region_name(region_names, *a), region_name(region_names, *b)),
+            Category::WithRest(a)  => format!("{} with rest", region_name(region_names, *a)),
         };
 
 
@@ -263,6 +319,8 @@ fn plot_betweens(
     categories: &[FxHashMap<Category, f64>],
     t_split: f64,
     t_end: f64,
+    region_names: &[String],
+    region_ends: &[f64],
     filename: impl AsRef<Path>,
 ) {
     assert!(t_split > 0.0 && t_end > t_split, "Require 0 < t_split < t_end");
@@ -293,6 +351,8 @@ fn plot_betweens(
     chart_left.draw_series(std::iter::once(PathElement::new(
         vec![(t_split, 0.0), (t_split, 1.0)], BLACK.mix(0.7),
     ))).unwrap();
+
+    draw_region_ends(&mut chart_left, region_ends, 0.0, t_split);
 
     let mut chart_right = ChartBuilder::on(&right)
         .caption("Logarithmic plot", ("sans-serif", 18))
@@ -332,7 +392,10 @@ fn plot_betweens(
             .collect();
 
         let Category::Between(a, b) = category else { unreachable!() };
-        let label = format!("Between region {} and {}", a + 1, b + 1);
+        let label = format!("Between {} and {}",
+            region_name(region_names, *a),
+            region_name(region_names, *b));
+
 
         chart_left.draw_series(LineSeries::new(
             series.iter().cloned().filter(|(t, _)| *t <= t_split + eps),

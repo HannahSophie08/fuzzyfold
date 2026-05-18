@@ -15,6 +15,10 @@ path = "src/bin/ff-interactions.rs"
 name = "ff-plot_interactions"
 path = "src/bin/ff-plot_interactions.rs"
 
+[[bin]]
+name = "ff-categories"
+path = "src/bin/ff-categories.rs"
+
 
 
 [dependencies]
