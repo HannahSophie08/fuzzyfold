@@ -63,9 +63,9 @@ fn main() -> Result<()> {
     let mut lengths: Vec<usize> = Vec::new();
 
     for l in 1usize..sequence.len() {
-        let subseq = sequence[..l];
+        let subseq = &sequence[..l];
 
-        let structures = run_rnasubopt(subseq, cli.num_samples)?;
+        let structures = run_rnasubopt(&subseq, cli.num_samples)?;
         if structures.is_empty() {
             continue
         }
