@@ -23,6 +23,10 @@ path = "src/bin/ff-categories.rs"
 name = "ff-subopt-categories"
 path = "src/bin/ff-subopt-categories.rs"
 
+[[bin]]
+name = "ff-plot_subopt"
+path = "src/bin/ff-plot_subopt.rs"
+
 [dependencies]
 ff_structure.workspace = true
 ff_energy.workspace = true
