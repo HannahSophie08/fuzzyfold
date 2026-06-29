@@ -136,19 +136,7 @@ impl MacrostatePL {
     
     /// Check if a secondary structure is contained in this macrostate.
     pub fn contains(&self, structure: &PairList) -> bool {
-
-        for(macrostate_pl, _) in &self.ensemble {
-
-    
-            if macrostate_pl.len() != structure.len() { //if number of pairs doesn't match, continue
-                continue;
-            }
-
-            if *macrostate_pl == *structure {
-                return true;
-            }
-        }
-        false
+        self.ensemble.contains_key(structure)
     }
 
 
