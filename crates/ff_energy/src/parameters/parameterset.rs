@@ -14,7 +14,7 @@ pub type Int11Params = [[[[i32; B]; B]; P]; P];
 pub type Int21Params = [[[[[i32; B]; B]; B]; P]; P];
 pub type Int22Params = [[[[[[i32; B]; B]; B]; B]; P]; P];
 
-pub const E: usize = 8;  // AU, UA, CG, GC, GU, UG, AP, PA
+pub const E: usize = 12;  // AU, UA, CG, GC, GU, UG, AP, PA, IU, UI, CI, IC
 pub type ExtendedStackParams = [[Option<i32>; E]; E];
 
 #[derive(Copy, Clone, Debug)]
