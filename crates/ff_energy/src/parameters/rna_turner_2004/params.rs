@@ -50,6 +50,10 @@ pub static RNA_TURNER_2004: RNAThermoParams = RNAThermoParams {
     terminal_ru_enth: 370,
     terminal_ap_en37:  50, // Dummy
     terminal_ap_enth: 370, // Dummy
+    terminal_iu_en37:  50, // Dummy
+    terminal_iu_enth: 370, // Dummy
+    terminal_ci_en37:  0, // Dummy
+    terminal_ci_enth:  0, // Dummy
     lxc: 107.856,
 
     ninio_en37:  60,

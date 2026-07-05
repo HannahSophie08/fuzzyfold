@@ -2,6 +2,13 @@
 
 All notable changes to this crate will be documented in this file.
 
+## Development
+### Fixed
+- GU stacking enthalpies.
+
+### Added
+- Inosine parameters.
+
 ## [0.4.1] - 2026-06-18
 ### Fixed
 - Revised duplicate hairpin free-energy parameters.

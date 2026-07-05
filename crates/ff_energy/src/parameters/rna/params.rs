@@ -50,6 +50,10 @@ pub static RNA_EXTENDED: RNAThermoParams = RNAThermoParams {
     terminal_ru_enth:  370,
     terminal_ap_en37:   31,
     terminal_ap_enth: -204,
+    terminal_iu_en37: -133,
+    terminal_iu_enth:   -8,
+    terminal_ci_en37:   -8,
+    terminal_ci_enth: -200,
     lxc: 107.856,
 
     ninio_en37:  60,

@@ -47,17 +47,19 @@ impl std::error::Error for SequenceError {}
 ///     - 
 #[repr(u8)]
 #[derive(Clone, Hash, Copy, Debug, Eq, PartialEq)]
-pub enum Base { A, C, G, U, T, PU, SB }
-pub const BCOUNT: usize = 6; // all except SB
+pub enum Base { A, C, G, U, T, PU, I, SB }
+pub const BCOUNT: usize = 7; // all except SB
 
 impl Base {
     /// T is always assumed to be U (for now).
     /// PU always uses U parameters if unpaired.
+    /// I always uses G parameters if unpaired. 
     #[inline(always)]
     pub const fn canonical_rna_index(self) -> usize {
         match self {
             Base::T => Base::U as usize,
             Base::PU => Base::U as usize,
+            Base::I => Base::G as usize,
             _ => self as usize,
         }
     }
@@ -84,6 +86,7 @@ impl TryFrom<char> for Base {
             'U' => Ok(Base::U),
             'T' => Ok(Base::T),
             'P' => Ok(Base::PU),
+            'I' => Ok(Base::I),
             '&' | '+' => Ok(Base::SB),
             _ => Err(SequenceError::InvalidBase(c)),
         }
@@ -99,6 +102,7 @@ impl fmt::Display for Base {
             Base::U => 'U',
             Base::T => 'T',
             Base::PU => 'P',
+            Base::I => 'I',
             Base::SB => '+',
         };
         write!(f, "{}", c)
@@ -196,9 +200,13 @@ pub enum PairTypeRNA {
     UG = 5,
     AP = 6,
     PA = 7,
-    NN = 8,
+    IU = 8,
+    UI = 9,
+    CI = 10,
+    IC = 11,
+    NN = 12,
 }
-pub const PCOUNT: usize = 8; // all except SB
+pub const PCOUNT: usize = 12; // all except SB
 
 const PAIR_LOOKUP: [[PairTypeRNA; BCOUNT]; BCOUNT] = {
     use Base::*;
@@ -218,6 +226,10 @@ const PAIR_LOOKUP: [[PairTypeRNA; BCOUNT]; BCOUNT] = {
     table[PU as usize][A as usize] = PA;
     table[G as usize][PU as usize] = GU;
     table[PU as usize][G as usize] = UG;
+    table[I as usize][U as usize] = IU;
+    table[U as usize][I as usize] = UI;
+    table[C as usize][I as usize] = CI;
+    table[I as usize][C as usize] = IC;
     table
 };
 
@@ -239,6 +251,10 @@ const FALLBACK_LOOKUP: [[PairTypeRNA; BCOUNT]; BCOUNT] = {
     table[PU as usize][A as usize] = UA;
     table[G as usize][PU as usize] = GU;
     table[PU as usize][G as usize] = UG;
+    table[I as usize][U as usize] = GU;
+    table[U as usize][I as usize] = UG;
+    table[C as usize][I as usize] = CG;
+    table[I as usize][C as usize] = GC;
     table
 };
 
@@ -259,6 +275,10 @@ impl fmt::Display for PairTypeRNA {
             PairTypeRNA::UG => "U-G",
             PairTypeRNA::AP => "A-P",
             PairTypeRNA::PA => "P-A",
+            PairTypeRNA::IU => "I-U",
+            PairTypeRNA::UI => "U-I",
+            PairTypeRNA::CI => "C-I",
+            PairTypeRNA::IC => "I-C",
             PairTypeRNA::NN => "N-N",
         };
         write!(f, "{}", s)
@@ -267,7 +287,7 @@ impl fmt::Display for PairTypeRNA {
 
 const PAIR_INVERT: [PairTypeRNA; PCOUNT + 1] = {
     use PairTypeRNA::*;
-    [UA, AU, GC, CG, UG, GU, PA, AP, NN]
+    [UA, AU, GC, CG, UG, GU, PA, AP, UI, IU, CI, IC, NN]
 };
 
 impl PairTypeRNA {
@@ -284,6 +304,15 @@ impl PairTypeRNA {
     pub fn is_ap(&self) -> bool {
        matches!(self, PairTypeRNA::AP | PairTypeRNA::PA)
     }
+
+    pub fn is_iu(&self) -> bool {
+       matches!(self, PairTypeRNA::IU | PairTypeRNA::UI)
+    }
+
+    pub fn is_ci(&self) -> bool {
+       matches!(self, PairTypeRNA::CI | PairTypeRNA::IC)
+    }
+    
 
     pub fn is_wcf(&self) -> bool {
        matches!(self

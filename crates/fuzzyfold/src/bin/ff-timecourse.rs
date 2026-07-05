@@ -334,7 +334,7 @@ fn main() -> Result<()> {
         })
     });
 
-    plot_occupancy_over_time(&master, svg_path.clone(), &title, cli.simulation.t_ext, cli.simulation.t_end);
+    plot_occupancy_over_time(&master, svg_path.clone(), &title, cli.simulation.t_ext.unwrap(), cli.simulation.t_end);
     println!("Plotted svg file: {}", svg_path.display());
 
     Ok(())

@@ -54,6 +54,10 @@ pub static DNA_MATHEWS_2004: RNAThermoParams = RNAThermoParams {
     terminal_ru_enth:  320,
     terminal_ap_en37:    0, // DUMMY
     terminal_ap_enth:  320, // DUMMY
+    terminal_iu_en37:    0, // DUMMY
+    terminal_iu_enth:  320, // DUMMY
+    terminal_ci_en37:    0, // DUMMY
+    terminal_ci_enth:    0, // DUMMY
     lxc: 107.856,
 
     ninio_en37: 40,

@@ -33,7 +33,7 @@
 //! - [AP][GU] = [AU][GU]
 //! - [GP] = [GU] (not even shown in table.)
 //! - All unspecified insosine interactions are treated as **G***.
-//! - [IU][IU] = [IU][IG]
+//! - [IU][IU] = [IU][GU]
 //! - [IU][GU] = [GU][GU]
 //! - [AP][IU] = [AP][GU]
 //! - [IU][AP] = [IU][AU]

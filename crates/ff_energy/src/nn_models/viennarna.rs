@@ -51,6 +51,10 @@ pub struct ViennaRNA {
     terminal_ru: i32,
     /// Terminal pseudo-Uridine evaluation.
     terminal_ap: i32,
+    /// Terminal IU and UI penalty.
+    terminal_iu: i32,
+    /// Terminal CI and IC penalty.
+    terminal_ci: i32,
 
     /// Asymmetric internal loop correction.
     ninio: i32,
@@ -123,6 +127,9 @@ impl ViennaRNA {
             duplex_init: params.duplex_init,
             terminal_ru: params.terminal_ru,
             terminal_ap: params.terminal_ru,
+            terminal_iu: params.terminal_ru,
+            terminal_ci: params.terminal_ru,
+            
             lxc: params.lxc,
 
             ninio: params.ninio,
@@ -167,6 +174,8 @@ impl ViennaRNA {
                 duplex_init: params.duplex_init_en37,
                 terminal_ru: params.terminal_ru_en37,
                 terminal_ap: params.terminal_ap_en37,
+                terminal_iu: params.terminal_iu_en37,
+                terminal_ci: params.terminal_ci_en37,
                 lxc: params.lxc,
 
                 ninio: params.ninio_en37,
@@ -209,6 +218,8 @@ impl ViennaRNA {
                 duplex_init: rescale_param!(duplex_init, params, scale),
                 terminal_ru: rescale_param!(terminal_ru, params, scale),
                 terminal_ap: rescale_param!(terminal_ap, params, scale),
+                terminal_iu: rescale_param!(terminal_iu, params, scale),
+                terminal_ci: rescale_param!(terminal_ci, params, scale),
                 lxc: params.lxc * celsius,
 
                 ninio: rescale_param!(ninio, params, scale),
@@ -277,6 +288,11 @@ impl ViennaRNA {
         if PairTypeRNA::from((seq[0], *seq.last().unwrap())).is_ap() {
             en -= self.terminal_ru;
             en += self.terminal_ap;
+        } else if PairTypeRNA::from((seq[0], *seq.last().unwrap())).is_iu() {
+            en -= self.terminal_ru;
+            en += self.terminal_iu;
+        } else if PairTypeRNA::from((seq[0], *seq.last().unwrap())).is_ci() {
+            en += self.terminal_ci;
         }
 
         Ok(en)
@@ -291,8 +307,14 @@ impl ViennaRNA {
 
         let outer = PairTypeRNA::from((*fwdseq.first().unwrap(), *revseq.last().unwrap()));
         let inner = PairTypeRNA::from((*revseq.first().unwrap(), *fwdseq.last().unwrap()));
-        let pg1 = if outer.is_ap() { self.terminal_ap - self.terminal_ru } else { 0 };
-        let pg2 = if inner.is_ap() { self.terminal_ap - self.terminal_ru } else { 0 };
+        let pg1 = if outer.is_ap() { self.terminal_ap - self.terminal_ru }  
+                    else if outer.is_iu() { self.terminal_iu - self.terminal_ru }
+                    else if outer.is_ci() { self.terminal_ci - self.terminal_ru }
+                    else { 0 };
+        let pg2 = if inner.is_ap() { self.terminal_ap - self.terminal_ru }
+                    else if inner.is_iu() { self.terminal_iu - self.terminal_ru }
+                    else if inner.is_ci() { self.terminal_ci - self.terminal_ru }
+                    else { 0 };
 
         let res = match (fwdseq.len(), revseq.len()) {
             (2, 2) => {
@@ -420,7 +442,12 @@ impl ViennaRNA {
                 en += self.terminal_ru;
             } else if pair.is_ap() {
                 en += self.terminal_ap;
+            } else if pair.is_iu() {
+                en += self.terminal_iu;
+            } else if pair.is_ci() {
+                en += self.terminal_ci;
             }
+
             let d5 = segments.get(i)
                 .and_then(|seg| seg.len().checked_sub(2).and_then(|d| seg.get(d)));
             let d3 = segments.get(j).and_then(|seg| seg.get(1));
@@ -469,7 +496,12 @@ impl ViennaRNA {
                 en += self.terminal_ru;
             } else if pair.is_ap() {
                 en += self.terminal_ap;
+            } else if pair.is_iu() {
+                en += self.terminal_iu;
+            } else if pair.is_ci() {
+                en += self.terminal_ci;
             }
+
 
             let d5 = segments.get(i)
                 .and_then(|seg| seg.len().checked_sub(2).and_then(|d| seg.get(d)));
@@ -919,5 +951,20 @@ mod tests {
         assert_meos!(model, seq, dbr, e37);
     }
 
+    #[test]
+    fn parses_inosine() {
+        assert_eq!(Base::try_from('I').unwrap(), Base::I);
+    }
+
+    #[test]
+    fn inosine_in_rna() {
+        assert!(NucleotideVec::try_from_rna("AGI").is_ok());
+    }
+
+     #[test]
+    fn inosine_canonical_rna_index() {
+        assert_eq!(Base::I.canonical_rna_index(), Base::G as usize);
+    }
+    
 }
 
