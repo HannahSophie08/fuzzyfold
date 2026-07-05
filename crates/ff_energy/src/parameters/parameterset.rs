@@ -69,6 +69,10 @@ pub struct RNAThermoParams {
     pub terminal_ru_enth: i32,
     pub terminal_ap_en37: i32,
     pub terminal_ap_enth: i32,
+    pub terminal_iu_en37: i32,
+    pub terminal_iu_enth: i32,
+    pub terminal_ci_en37: i32,
+    pub terminal_ci_enth: i32,
     pub lxc: f64,
     // NINIO parameters
     pub ninio_en37: i32,
