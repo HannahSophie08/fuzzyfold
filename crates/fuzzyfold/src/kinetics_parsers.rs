@@ -28,25 +28,25 @@ impl RateModelArguments {
     }
 }
 
-/// TODO: Timeline parameter parsing.
+/// Timeline parameter parsing.
 ///
 /// Any timeline is composed of two regimes: 
 ///  - first a linear regime [0 .. t-seq] 
 ///  - second a logarithmic regime [t-sep .. t-end].
 /// Each regime is divided into equally spaced time-points for analysis, which
-/// are specified by parameters --t-lin and --t-log respectively.
+/// are specified by parameters --t-lin (>=1) and --t-log (>=0) respectively.
 ///
 /// We distinguish two modes:
-///  - full-length: When the sequence length remains constant all parameters can
-///     be set directly. --t-sep defaults to 1/k0, i.e. the expected waiting time 
-///     for the fastest reactions. All other parameters have constant defaults
-///     and can be adjusted directly.
+///  - full-length: When the sequence length remains constant, then --t-sep
+///  defaults to 1/k0, i.e. the expected waiting time for the fastest reactions.
+///  All other parameters have constant defaults and t-end is set explicitly
+///  with --t-end.
 ///
 ///  - co-transcriptional: When sequence length changes over time, then the
-///     additional parameter --t-ext sets the simulation time at each
-///     nucleotide. In this mode, --t-sep defaults to the end-of-transcription,
-///     and t-end = #extensions * --t-ext + --t-end. That is, the --t-end
-///     parameter only effects the simulation time at the last nucleotide.
+///  additional parameter --t-ext sets the simulation time at each nucleotide.
+///  In this mode, --t-sep defaults to the end-of-transcription, and 
+///  t-end = #extensions * --t-ext + --t-end -- that is, the --t-end parameter
+///  only effects the simulation time at the last nucleotide.
 ///
 #[derive(Debug, Args)]
 pub struct TimelineParameters {
@@ -68,8 +68,8 @@ pub struct TimelineParameters {
     pub t_sep: Option<f64>,   
 
     /// Number of time points on the linear scale.
-    #[arg(long, default_value_t = 100)]
-    pub t_lin: usize,
+    #[arg(long, default_value_t = 0)]
+    pub t_lin: usize, 
 
     /// Number of time points on the logarithmic scale.
     #[arg(long, default_value_t = 100)]
@@ -79,119 +79,74 @@ pub struct TimelineParameters {
 impl TimelineParameters {
     /// Validate that all parameters make sense.
     /// Either: t-ext is none: classic-mode
-    pub fn validate(&self) -> Result<()> {
-        if self.t_ext.is_none() { 
-            if let Some(sep) = self.t_sep {
-                if self.t_end <= sep {
-                    bail!("t_end ({}) must be greater than t_sep ({})", self.t_end, sep);
+    pub fn validate(&mut self, k0: f64, num_ext: usize) -> Result<()> {
+        if (num_ext == 0) != self.t_ext.is_none() {
+            // needs better bail warning for different cases.
+            bail!("Inconsistent input!");
+        }
+
+        // Set default values for t_sep in case it is not set by user.
+        if self.t_lin == 0 {
+            // full-length mode or if t-sep is set.
+            if self.t_ext.is_none() || self.t_sep.is_some() { 
+                self.t_lin = 1;
+            } else { // co-transcriptional mode
+                self.t_lin = num_ext;
+            }
+        } 
+
+        // Set default values for t_sep in case it is not set by user.
+        if self.t_sep.is_none() {
+            if self.t_ext.is_none() { // full-length mode
+                self.t_sep = Some(1.0/k0)
+            } else { // co-transcriptional mode
+                self.t_sep = Some(self.t_ext.unwrap() * num_ext.as_f64());
+            }
+        // Verify user-set values for t_sep.
+        } else {
+            if self.t_ext.is_none() {
+                if self.t_end <= self.t_sep.unwrap() {
+                    bail!("t_end ({}) must be greater than t_sep ({})", self.t_end, self.t_sep.unwrap());
+                }
+            } else {
+                if self.t_ext.unwrap() * num_ext.as_f64() + self.t_end <= self.t_sep.unwrap() {
+                    bail!("Error: 't_sep' must be smaller than the total simulation time!");
                 }
             }
         }
-        
-        if self.t_lin == 0 && self.t_log > 1 {
-            bail!("t_lin must be > 0 if t_log > 1 (got t_lin={}, t_log={})", self.t_lin, self.t_log);
-        }
+ 
         Ok(())
     }
 
-    pub fn get_output_times(&self, sequence: &NucleotideVec, structure: Option<&DotBracketVec>) -> Vec<f64> {
+    pub fn get_output_times(&self, num_ext: usize) -> Vec<f64> {
         let t_end = self.t_end;
-        let t_ext = self.t_ext;
         let t_lin = self.t_lin;
         let t_log = self.t_log;
-        let t_sep = self.t_sep;
+        let t_sep = self.t_sep.expect("t-sep has to be set during validation!");
         let mut times = vec![0.0];
 
-        if t_ext.is_none() { // full length simulation
-            
-            // t_sep given => t_lin evenly spaced timepoints on a linear timescale between 0 and t-sep and 
-            // t_log timepoints on a logarithmic timescale 
-
-                // Linear segments: append `t_lin` evenly spaced points between 0...t_sep
-                let start = *times.last().unwrap();
-                let step = t_sep.unwrap() / t_lin as f64;
-                for i in 1..=t_lin {
-                    times.push(start + i as f64 * step);
-                }
-
-                // Logarithmic tail: append 't_log logarithmic timepoints between t-sep...t_end
-                let start = *times.last().unwrap();
-                let log_start = start.ln();
-                let log_end = t_end.ln();
-                for i in 1..t_log {
-                    let frac = i as f64 / t_log as f64;
-                    let value = (log_start + frac * (log_end - log_start)).exp();
-                    times.push(value);
-                }
-                times.push(t_end);
-
-                times
-
-        } else {  // Co-transcriptional simulation 
-            
-            if t_sep.is_none() { 
-                // no t_sep given => t_lin = timepoints per transcript length; t_log = timepoints selected for full length simulation 
-                // Co-transcriptional folding: linear timescale, posttranscriptional folding: logarithmic timescale 
-
-                // Linear time points: append `t_lin` evenly spaced points per t_ext  (0...t-ext)
-                let start_len = structure.map(|s| s.len()).unwrap_or(1);
-                let total_len = sequence.len();
-
-                let mut len = start_len;
-
-                while len < total_len {
-                    let start = *times.last().unwrap();
-                    let step = t_ext.unwrap() / t_lin as f64;
-                    for i in 1..= t_lin {
-                        times.push(start + i as f64 * step);
-                    }
-                    len += 1;
-                }
-
-                // Logarithmic tail: append 't-log' logarithmic spaced timepoints between t-ext * (sequence_len - start_len -1)...t_end
-                let sep = *times.last().unwrap();
-                let log_start = sep.ln();
-                let log_end = (sep + t_end).ln();
-                for i in 1..t_log {
-                    let frac = i as f64 / t_log as f64;
-                    let value = (log_start + frac * (log_end - log_start)).exp();
-                    times.push(value);
-                }
-                times.push(sep + t_end);
-
-                times
-
-            } else { 
-            // t_sep given => t_lin evenly spaced timepoints on a linear timescale between 0 and t-sep and 
-            // t_log timepoints on a logarithmic timescale between t-sep and (t-ext * (sequence_len - start_len -1) + t_end)
-
-                let start_len = structure.map(|s| s.len()).unwrap_or(1);
-                let total_len = sequence.len(); 
-
-                // Linear segments: append `t_lin` evenly spaced points
-                let start = *times.last().unwrap();
-                let step = t_sep.unwrap() / t_lin as f64;
-                for i in 1..= t_lin {
-                    times.push(start + i as f64 * step);
-                }
-
-                // Logarithmic tail
-                let start = *times.last().unwrap();
-                let log_start = start.ln();
-                let end = (t_ext.unwrap() * (total_len - start_len).as_f64()) + t_end;
-                let log_end = end.ln();
-                for i in 1..t_log {
-                    let frac = i as f64 / t_log as f64;
-                    let value = (log_start + frac * (log_end - log_start)).exp();
-                    times.push(value);
-                }
-                times.push(end);
-
-                times
-            }
+        let start = *times.last().unwrap();
+        let step = t_sep / t_lin as f64;
+        for i in 1..=t_lin {
+            times.push(start + i as f64 * step);
         }
+
+        // Logarithmic tail: append 't_log logarithmic timepoints between t-sep...t_end
+        let start = *times.last().unwrap();
+        let log_start = start.ln();
+        let end = if let Some(t_ext) = self.t_ext {
+            t_ext * num_ext.as_f64() + t_end
+        } else { t_end };
+        let log_end = end.ln();
+        for i in 1..t_log {
+            let frac = i as f64 / t_log as f64;
+            let value = (log_start + frac * (log_end - log_start)).exp();
+            times.push(value);
+        }
+        times.push(end);
+
+        times
     }
 }
 
 
-   

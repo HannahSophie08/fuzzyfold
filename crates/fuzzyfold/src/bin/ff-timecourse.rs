@@ -1,27 +1,27 @@
-//! Stochastic folding simulator 
+//! Stochastic ensemble analysis 
 //! 
-//! This binary performs stochastic folding simulations both at full sequence length and 
-//! cotranscriptional, running multiple simulations in parallel and merging them into a master timeline. 
-//! This timeline is used to produce an occupancy plot. The plot shows the occupancy of predefined 
-//! macrostates in average over time. 
+//! This binary performs multiple stochastic folding simulations in parallel and
+//! merges them into a unified timeline. This timeline then contains the occupancy
+//! of predefined macrostates over time. 
 //! 
-//! Mode: 
-//! Full length simulation: give structure of full sequence length 
-//! Cotranscriptonal simulation: give no structure or structure shorter than sequence length
+//! Modes: 
+//!  - full-length simulation: when a full-length starting structure is provided.
+//!  - co-transcriptonal simulation: if a shorter-than-full-length structure is
+//!  provided together with the parameter --t-ext.
 //! 
 //! --- Full length simulation --- 
 //! 
 //! Parameters:
 //!  
 //! - t-end: total simulation time 
-//! - t-sep: last timepoint on linear scale (timepoint where linear scale in occupany plot switches to logarithmic scale and seperator is placed)
-//! - t-lin: timepoints on linear time scale [0...t-sep]
-//! - t-log: time points on logarithmic timescale [t-sep...t-log]
+//! - t-sep: last timepoint on linear scale and first timepoint of a logarithmic scale.
+//! - t-lin: number of time points on linear time scale [0...t-sep]
+//! - t-log: number of time points on logarithmic time scale [t-sep...t-log]
 //! - num-sims: number of simulations performed
 //! - k0: kinetic rate constant 
 //! 
 //! Input
-//! - user has to give structure and t-sep
+//! - starting structure
 //! - optional: t-lin and t-log (default: 100)
 //! - optional: t-end (default: 1.0)
 //! - optional: num-sim (default: 1)
@@ -94,6 +94,7 @@ use ff_kinetics::timeline_plotting::plot_occupancy_over_time;
 use ff_kinetics::MacrostateRegistry;
 
 use fuzzyfold::input_parsers::read_cotr_input;
+use fuzzyfold::input_parsers::read_eval_input;
 use fuzzyfold::energy_parsers::EnergyModelArguments;
 use fuzzyfold::kinetics_parsers::RateModelArguments;
 use fuzzyfold::kinetics_parsers::TimelineParameters;
@@ -128,55 +129,45 @@ pub struct Cli {
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
-    cli.simulation.validate()?;
-
-    // --- Build simulator ---
+    let mut cli = Cli::parse();
     let emodel = Arc::new(cli.energy.build_model());
     let rmodel = cli.kinetics.build_model(emodel.temperature());
 
     let is_rna = cli.energy.dna.is_none();
-    let (header, sequence, structure) = read_cotr_input(&cli.input, is_rna)?;
+    let (header, sequence, structure) =
+        if cli.simulation.t_ext.is_some() {
+            read_cotr_input(&cli.input, is_rna)?
+        } else {
+            match read_eval_input(&cli.input, is_rna) {
+                Ok(v) => v,
+                Err(e) => return Err(anyhow::anyhow!("{e} (or use --t-ext?)")),
+            }
+        };
+    let num_ext = sequence.len() - structure.len();
+    cli.simulation.validate(cli.kinetics.k0, num_ext)?;
+    let t_sep = cli.simulation.t_sep.expect("t-sep must exist after validation!");
     let pairings = PairTable::try_from(&structure)?;
-
-    // --- Check input ---
-    if structure.len() < sequence.len() && cli.simulation.t_ext.is_none() {
-        panic!("Error:'t-ext' (extension time) missing for cotranscriptional simulation!"); 
-    }
-
-    if structure.len() == sequence.len() && cli.simulation.t_sep.is_none() {
-        panic!("Error: 't-sep' (last timepoint of the linear scale) missing for full length simulation!")
-    }
-
-    if structure.len() == sequence.len() && cli.simulation.t_ext.is_some() {
-        panic!("Error: 't-ext' (extension time) given in combination with full length structure. For cotranscriptional simulation give either 
-        shorter start structure or no structure!");
-    }
-
-    if cli.simulation.t_ext.is_some() && cli.simulation.t_sep.is_some() {
-        if cli.simulation.t_sep.unwrap() >= (cli.simulation.t_ext.unwrap() * (sequence.len() - structure.len()).as_f64() + cli.simulation.t_end) {
-            panic!("Error: 't_sep' must be smaller than the total simulation time!");
-        } 
-    }
-
-    let n = header.clone();
-    let name = n
-        .as_deref()
-        .map(|h| h.trim_start_matches('>'))
-        .and_then(|h| h.split_whitespace().next())
-        .unwrap_or("unnamed_sequence");
 
     if let Some(h) = header {
         println!("{}", h.yellow());
     }
-
     println!("{}", sequence);
-
+ 
     println!("Output after {} simulations: \n - {:?}\n - {:?}\n - {:?}",
         cli.num_sims, cli.kinetics, cli.simulation, cli.energy);
 
-    let times = cli.simulation.get_output_times(&sequence, Some(&structure)); // build times vector for output times 
+    let times = cli.simulation.get_output_times(num_ext);
 
+    let (sim_times, t_fin) = if num_ext > 0 {
+        let t_ext = cli.simulation.t_ext.unwrap();
+        let t_end = cli.simulation.t_end;
+        let mut a = vec![t_ext; num_ext];
+        a.push(t_end);
+        (a, t_ext * num_ext.as_f64() + t_end)
+    } else { 
+        (vec![cli.simulation.t_end], cli.simulation.t_end)
+    };
+                                                                            //
     let mut macrostates = MacrostateRegistry::from((sequence.clone(), emodel.clone()));
     macrostates.insert_files(&cli.macrostates)?;
     // Verbose Output
@@ -197,7 +188,6 @@ fn main() -> Result<()> {
     }
     let shared_macrostates = Arc::new(macrostates);
 
-
     // Output paths 
     let tln_path = cli.output.with_extension("tln");
     let svg_path = cli.output.with_extension("svg");
@@ -213,94 +203,36 @@ fn main() -> Result<()> {
             Timeline::new(&times, Arc::clone(&shared_macrostates))
         };
 
-
-    if cli.simulation.t_ext.is_none() { // full length simulation 
-        let timelines: Vec<_> =
+    let timelines: Vec<_> =
         match (rmodel.k3ws().is_some(), rmodel.k4ws().is_some()) {
             (false, false) => {
                 let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, NoShift))
                     .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_timecourse(moves, rmodel, cli.simulation.t_end, cli.num_sims as u64,
+                run_timecourse(moves, rmodel, &sim_times, cli.num_sims as u64,
                     Arc::clone(&shared_macrostates), &times).collect()
             },
             (true, false) => {
                 let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, ThreeWayOnly))
                     .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_timecourse(moves, rmodel, cli.simulation.t_end, cli.num_sims as u64,
+                run_timecourse(moves, rmodel, &sim_times, cli.num_sims as u64,
                     Arc::clone(&shared_macrostates), &times).collect()
             },
             (false, true) => {
                 let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, FourWayOnly))
                     .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_timecourse(moves, rmodel, cli.simulation.t_end, cli.num_sims as u64,
+                run_timecourse(moves, rmodel, &sim_times, cli.num_sims as u64,
                     Arc::clone(&shared_macrostates), &times).collect()
             },
             (true, true) => {
                 let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, ThreeAndFour))
                     .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_timecourse(moves, rmodel, cli.simulation.t_end, cli.num_sims as u64,
+                run_timecourse(moves, rmodel, &sim_times, cli.num_sims as u64,
                     Arc::clone(&shared_macrostates), &times).collect()
             },
         };
 
-        for timeline in timelines {
-            master.merge(timeline);
-        }
-        
-        plot_occupancy_over_time(&master, svg_path.clone(), &format!("Timecourse {}", name),cli.simulation.t_sep.unwrap(), cli.simulation.t_end);
-
-
-    } else { // cotranscriptional folding simulation
-
-        let mut sim_times = vec![cli.simulation.t_ext.unwrap(); sequence.len() - structure.len()];
-        sim_times.push(cli.simulation.t_end);
-
-        let timelines: Vec<_> =
-        match (rmodel.k3ws().is_some(), rmodel.k4ws().is_some()) {
-            (false, false) => {
-                let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, NoShift))
-                    .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_cotimecourse(moves, rmodel, &sim_times, cli.num_sims as u64,
-                    Arc::clone(&shared_macrostates), &times).collect()
-            },
-            (true, false) => {
-                let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, ThreeWayOnly))
-                    .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_cotimecourse(moves, rmodel, &sim_times, cli.num_sims as u64,
-                    Arc::clone(&shared_macrostates), &times).collect()
-            },
-            (false, true) => {
-                let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, FourWayOnly))
-                    .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_cotimecourse(moves, rmodel, &sim_times, cli.num_sims as u64,
-                    Arc::clone(&shared_macrostates), &times).collect()
-            },
-            (true, true) => {
-                let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, ThreeAndFour))
-                    .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_cotimecourse(moves, rmodel, &sim_times, cli.num_sims as u64,
-                    Arc::clone(&shared_macrostates), &times).collect()
-            },
-        };
-
-        for timeline in timelines {
-            master.merge(timeline);
-        }
-
-        // cotranscriptional simulation time
-        let co_time = cli.simulation.t_ext.unwrap() * (sequence.len() - structure.len()).as_f64(); 
-        // total simulation time
-        let post_time = co_time + cli.simulation.t_end;
-
-        if cli.simulation.t_sep.is_none() { // No t-sep given
-            
-            plot_occupancy_over_time(&master, svg_path.clone(), &format!("Cotimecourse {}", name),co_time, post_time);
-
-        } else { // t-sep given 
-
-            plot_occupancy_over_time(&master, svg_path.clone(), &format!("Cotimecourse {}", name), cli.simulation.t_sep.unwrap(), post_time);  
-        }
-
+    for timeline in timelines {
+        master.merge(timeline);
     }
 
     println!("{}", "Finished simulations!".red());
@@ -314,28 +246,27 @@ fn main() -> Result<()> {
     fs::write(tln_path.clone(), json).unwrap();
     println!("Wrote tln file: {}", tln_path.display());
 
-    //let numsim = master.points[0].counter;
-    //let title = cli.title.unwrap_or({
-    //    format!("ff-timecourse ({} simulations)", 
-    //    {
-    //        if numsim >= 10000 {
-    //            let s = numsim.to_string();
-    //            let mut out = String::new();
-    //            for (i, c) in s.chars().rev().enumerate() {
-    //                if i > 0 && i % 3 == 0 {
-    //                    out.push('_');
-    //                }
-    //                out.push(c);
-    //            }
-    //            out.chars().rev().collect::<String>()
-    //        } else { 
-    //            numsim.to_string()
-    //        }
-    //    })
-    //});
-
-    //plot_occupancy_over_time(&master, svg_path.clone(), &title, cli.simulation.t_ext, cli.simulation.t_end);
-    //println!("Plotted svg file: {}", svg_path.display());
+    let numsim = master.points[0].counter;
+    let title = cli.title.unwrap_or({
+        format!("ff-timecourse ({} simulations)", 
+        {
+            if numsim >= 10000 {
+                let s = numsim.to_string();
+                let mut out = String::new();
+                for (i, c) in s.chars().rev().enumerate() {
+                    if i > 0 && i % 3 == 0 {
+                        out.push('_');
+                    }
+                    out.push(c);
+                }
+                out.chars().rev().collect::<String>()
+            } else { 
+                numsim.to_string()
+            }
+        })
+    });
+    plot_occupancy_over_time(&master, svg_path.clone(), &title, t_sep, t_fin);
+    println!("Wrote svg file: {}", svg_path.display());
 
     Ok(())
 }
@@ -344,7 +275,7 @@ fn main() -> Result<()> {
 fn run_timecourse<W, K, E>(
     moves: W,
     rmodel: K,
-    t_end: f64,
+    sim_times: &[f64],
     num_sims: u64,
     registry: Arc<MacrostateRegistry<E>>,
     times: &[f64],
@@ -373,9 +304,9 @@ where
 
                 let mut simulator = SSA::from((moves.clone(), rmodel.clone()));
                 let mut t_idx = 0;
-                simulator.simulate(
+                simulator.co_simulate(
                     &mut rng(),
-                    t_end,
+                    sim_times,
                     |t, tinc, _, w| {
                         while t_idx < times.len() && t + tinc >= times[t_idx] {
                             let structure = w.current_structure();
@@ -392,57 +323,4 @@ where
         )
 }
 
-
-/// Cotranscriptional folding simulation 
-fn run_cotimecourse<W, K, E>(
-    moves: W,
-    rmodel: K,
-    sim_times: &[f64],
-    num_sims: u64,
-    registry: Arc<MacrostateRegistry<E>>,
-    times: &[f64],
-) -> impl ParallelIterator<Item = Timeline<E>>
-where
-    W: Walker + Clone + Send + Sync,
-    K: RateModel + Clone + Send + Sync,
-    E: EnergyModel + Send + Sync,
-    SSA<W, K>: From<(W, K)>,
-{
-    let pb = ProgressBar::new(num_sims);
-    pb.set_style(
-        ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
-        .unwrap()
-        .progress_chars("#>-"),
-    );
-
-    (0..num_sims)
-    .into_par_iter()
-    .map_init(
-        move || pb.clone(), // each thread gets a clone
-        move |pb, _| {
-            let registry = Arc::clone(&registry);
-            let mut timeline = Timeline::new(times, registry);
-
-            let mut simulator = SSA::from((moves.clone(), rmodel.clone()));
-            let mut t_idx = 0;
-            simulator.co_simulate(
-                &mut rng(),
-                sim_times,
-                |t, tinc, _, w| {
-                    while t_idx < times.len() && t + tinc >= times[t_idx] {
-                        let structure = w.current_structure();
-                        timeline.assign_structure(t_idx, &structure);
-                        t_idx += 1;
-                    }
-                    true
-                },
-            );
-
-            pb.inc(1);
-            timeline
-        },
-    )
-
-}
 

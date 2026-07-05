@@ -59,8 +59,8 @@ or, if you use pipes:
 cat dld1_lm3.na | ff-timecourse --macrostates dld1*.ms --t-end 1 -n 100 --output dld1_lm3_t1
 ```
 
-To familiarize yourself with the default timeline parameters `--t-lin`, `--t-log`,
-and `--t-ext` for output analysis, see:
+To familiarize yourself with the default timeline parameters `--t-lin`,
+`--t-log`, `--t-sep`, and `--t-ext` for output analysis, see:
 
 ```bash
 ff-timecourse --help
