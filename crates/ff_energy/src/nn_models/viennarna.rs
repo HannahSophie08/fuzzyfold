@@ -6,6 +6,7 @@ use crate::Base;
 use crate::PairTypeRNA;
 use crate::EnergyModel;
 use crate::EnergyError;
+use crate::build_closing_penalty;
 use crate::parameters::*;
 use crate::LoopDecomposition;
 use crate::NearestNeighborLoop;
@@ -47,14 +48,7 @@ pub struct ViennaRNA {
     /// Extrapolation constant for loops with len > 30 based on polymer theory.
     lxc: f64,
 
-    /// Terminal AU and GU penalty.
-    terminal_ru: i32,
-    /// Terminal pseudo-Uridine evaluation.
-    terminal_ap: i32,
-    /// Terminal IU and UI penalty.
-    terminal_iu: i32,
-    /// Terminal CI and IC penalty.
-    terminal_ci: i32,
+    closing_penalty: [i32; E],
 
     /// Asymmetric internal loop correction.
     ninio: i32,
@@ -125,11 +119,8 @@ impl ViennaRNA {
             interior: *params.interior,
 
             duplex_init: params.duplex_init,
-            terminal_ru: params.terminal_ru,
-            terminal_ap: params.terminal_ru,
-            terminal_iu: params.terminal_ru,
-            terminal_ci: params.terminal_ru,
-            
+            closing_penalty: build_closing_penalty(params.terminal_ru, params.terminal_ap, params.terminal_iu, params.terminal_ci),
+
             lxc: params.lxc,
 
             ninio: params.ninio,
@@ -172,10 +163,11 @@ impl ViennaRNA {
                 interior: *params.interior_en37,
 
                 duplex_init: params.duplex_init_en37,
-                terminal_ru: params.terminal_ru_en37,
-                terminal_ap: params.terminal_ap_en37,
-                terminal_iu: params.terminal_iu_en37,
-                terminal_ci: params.terminal_ci_en37,
+        
+
+                closing_penalty: build_closing_penalty(params.terminal_ru_en37, params.terminal_ap_en37, 
+                        params.terminal_iu_en37, params.terminal_ci_en37),
+
                 lxc: params.lxc,
 
                 ninio: params.ninio_en37,
@@ -216,10 +208,11 @@ impl ViennaRNA {
                 interior: rescale_params!(interior, params, scale),
 
                 duplex_init: rescale_param!(duplex_init, params, scale),
-                terminal_ru: rescale_param!(terminal_ru, params, scale),
-                terminal_ap: rescale_param!(terminal_ap, params, scale),
-                terminal_iu: rescale_param!(terminal_iu, params, scale),
-                terminal_ci: rescale_param!(terminal_ci, params, scale),
+
+                closing_penalty: build_closing_penalty(rescale_param!(terminal_ru, params, scale), 
+                    rescale_param!(terminal_ap, params, scale), rescale_param!(terminal_iu, params, scale), 
+                    rescale_param!(terminal_ci, params, scale)),
+
                 lxc: params.lxc * celsius,
 
                 ninio: rescale_param!(ninio, params, scale),
@@ -276,23 +269,17 @@ impl ViennaRNA {
             self.hairpin[30] + (self.lxc * ((n as f64) / 30.).ln()) as i32
         };
 
-        if n == 3 && fb_closing.is_ru() {
-            en += self.terminal_ru;
+        let closing_pair = PairTypeRNA::from((seq[0], *seq.last().unwrap()));
+
+        if n == 3 {
+            en += self.closing_penalty[closing_pair as usize];
         } else if n > 3 {
             en += self.mismatch_hairpin
                 [fb_closing as usize]
                 [seq[1].canonical_rna_index()]
-                [seq[n].canonical_rna_index()];
-        }
-
-        if PairTypeRNA::from((seq[0], *seq.last().unwrap())).is_ap() {
-            en -= self.terminal_ru;
-            en += self.terminal_ap;
-        } else if PairTypeRNA::from((seq[0], *seq.last().unwrap())).is_iu() {
-            en -= self.terminal_ru;
-            en += self.terminal_iu;
-        } else if PairTypeRNA::from((seq[0], *seq.last().unwrap())).is_ci() {
-            en += self.terminal_ci;
+                [seq[n].canonical_rna_index()]
+                + self.closing_penalty[closing_pair as usize]
+                - self.closing_penalty[fb_closing as usize];
         }
 
         Ok(en)
@@ -307,15 +294,10 @@ impl ViennaRNA {
 
         let outer = PairTypeRNA::from((*fwdseq.first().unwrap(), *revseq.last().unwrap()));
         let inner = PairTypeRNA::from((*revseq.first().unwrap(), *fwdseq.last().unwrap()));
-        let pg1 = if outer.is_ap() { self.terminal_ap - self.terminal_ru }  
-                    else if outer.is_iu() { self.terminal_iu - self.terminal_ru }
-                    else if outer.is_ci() { self.terminal_ci - self.terminal_ru }
-                    else { 0 };
-        let pg2 = if inner.is_ap() { self.terminal_ap - self.terminal_ru }
-                    else if inner.is_iu() { self.terminal_iu - self.terminal_ru }
-                    else if inner.is_ci() { self.terminal_ci - self.terminal_ru }
-                    else { 0 };
+        let pg1 = self.closing_penalty[outer as usize] -  self.closing_penalty[fb_outer as usize];
+        let pg2 = self.closing_penalty[inner as usize] -  self.closing_penalty[fb_inner as usize];
 
+       
         let res = match (fwdseq.len(), revseq.len()) {
             (2, 2) => {
                 self.stack[outer as usize][inner as usize]
@@ -351,8 +333,8 @@ impl ViennaRNA {
                 [revseq[2].canonical_rna_index()] + pg1 + pg2,
             (l, 2) | (2, l) => { // General Bulge case
                 let n = l - 2;
-                let ru_pg1 = if fb_outer.is_ru() { self.terminal_ru } else { 0 };
-                let ru_pg2 = if fb_inner.is_ru() { self.terminal_ru } else { 0 };
+                let ru_pg1 = self.closing_penalty[fb_outer as usize];
+                let ru_pg2 = self.closing_penalty[fb_inner as usize];
                 if n <= 30 {
                     self.bulge[n] + ru_pg1 + ru_pg2 + pg1 + pg2
                 } else {
@@ -438,15 +420,7 @@ impl ViennaRNA {
             if !pair.can_pair() {
                 return Err(EnergyError::InvalidClosingPair);
             }
-            if pair.is_ru() { 
-                en += self.terminal_ru;
-            } else if pair.is_ap() {
-                en += self.terminal_ap;
-            } else if pair.is_iu() {
-                en += self.terminal_iu;
-            } else if pair.is_ci() {
-                en += self.terminal_ci;
-            }
+            en += self.closing_penalty[pair as usize];
 
             let d5 = segments.get(i)
                 .and_then(|seg| seg.len().checked_sub(2).and_then(|d| seg.get(d)));
@@ -492,16 +466,7 @@ impl ViennaRNA {
             if !pair.can_pair() {
                 return Err(EnergyError::InvalidClosingPair);
             }
-            if pair.is_ru() { 
-                en += self.terminal_ru;
-            } else if pair.is_ap() {
-                en += self.terminal_ap;
-            } else if pair.is_iu() {
-                en += self.terminal_iu;
-            } else if pair.is_ci() {
-                en += self.terminal_ci;
-            }
-
+            en += self.closing_penalty[pair as usize];
 
             let d5 = segments.get(i)
                 .and_then(|seg| seg.len().checked_sub(2).and_then(|d| seg.get(d)));

@@ -27,6 +27,9 @@ pub struct AndronescuParams {
     // Misc parameters
     pub duplex_init: i32,
     pub terminal_ru: i32,
+    pub terminal_ap: i32,
+    pub terminal_iu: i32,
+    pub terminal_ci: i32,
     pub lxc: f64,
     // NINIO parameters
     pub ninio: i32,
@@ -63,6 +66,9 @@ pub static RNA_ANDRONESCU_2007: AndronescuParams = AndronescuParams {
 
     duplex_init: 410,
     terminal_ru:  11,
+    terminal_ap:  11, // DUMMY
+    terminal_iu:  11, // DUMMY
+    terminal_ci:  0,  // DUMMY
     lxc: 107.856,
 
     ninio:  50,
