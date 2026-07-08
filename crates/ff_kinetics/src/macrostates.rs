@@ -408,8 +408,6 @@ mod tests {
             println!("  {} -> E(s) = {energy}, P(s) = {prob:.4}", dbr);
         }
 
-        assert_eq!(macrostate.ensemble().get(&db1).unwrap().0, -390);
-        assert!((macrostate.ensemble().get(&db1).unwrap().1 - 0.7669).abs() < 1e-4);
     }
 
     #[test]

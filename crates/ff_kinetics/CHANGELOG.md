@@ -2,6 +2,11 @@
 
 All notable changes to this crate will be documented in this file.
 
+## development
+### Changed
+- now using truncated macrostate representation, that is, only the set of pairs
+determines a match. This is convenient for co-transcriptional folding.
+
 ## 0.4.2 - 2026-06-18
 ### Changed
 - no more lifetimes for macrostate interface to facilitate exports to python.

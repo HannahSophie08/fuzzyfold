@@ -1,11 +1,10 @@
 use clap::Args;
 use anyhow::bail;
 use anyhow::Result;
-use ff_energy::NucleotideVec;
 use ff_kinetics::Arrhenius;
-use ff_structure::DotBracketVec;
 use plotters::prelude::*;
 
+/// Rate model parameter parsing.
 #[derive(Debug, Args)]
 pub struct RateModelArguments {
     /// Rate constant for add/delete moves.
@@ -33,20 +32,21 @@ impl RateModelArguments {
 /// Any timeline is composed of two regimes: 
 ///  - first a linear regime [0 .. t-seq] 
 ///  - second a logarithmic regime [t-sep .. t-end].
+///
 /// Each regime is divided into equally spaced time-points for analysis, which
 /// are specified by parameters --t-lin (>=1) and --t-log (>=0) respectively.
 ///
 /// We distinguish two modes:
 ///  - full-length: When the sequence length remains constant, then --t-sep
-///  defaults to 1/k0, i.e. the expected waiting time for the fastest reactions.
-///  All other parameters have constant defaults and t-end is set explicitly
-///  with --t-end.
+///    defaults to 1/k0, i.e. the expected waiting time for the fastest reactions.
+///    All other parameters have constant defaults and t-end is set explicitly
+///    with --t-end.
 ///
 ///  - co-transcriptional: When sequence length changes over time, then the
-///  additional parameter --t-ext sets the simulation time at each nucleotide.
-///  In this mode, --t-sep defaults to the end-of-transcription, and 
-///  t-end = #extensions * --t-ext + --t-end -- that is, the --t-end parameter
-///  only effects the simulation time at the last nucleotide.
+///    additional parameter --t-ext sets the simulation time at each nucleotide.
+///    In this mode, --t-sep defaults to the end-of-transcription, and 
+///    t-end = #extensions * --t-ext + --t-end -- that is, the --t-end parameter
+///    only effects the simulation time at the last nucleotide.
 ///
 #[derive(Debug, Args)]
 pub struct TimelineParameters {

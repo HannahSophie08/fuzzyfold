@@ -10,9 +10,9 @@ cat dld1_lm4.na | ff-explore --rna turner2004 --delta 3.00 --sorted > dld1_lm4.m
 cat dld1_lm5.na | ff-explore --rna turner2004 --delta 3.00 --sorted > dld1_lm5.ms
  
 ## Generate data from stochastic simulations (run repeatedly or adjust number of simulations).
-cat dld1_lm2.na | ff-timecourse --rna turner2004 --macrostates dld1*.ms --k0 1e5 --t-ext 1e-5 --t-end 100 -n 100 --output dld1_lm2_t100
-cat dld1_lm4.na | ff-timecourse --rna turner2004 --macrostates dld1*.ms --k0 1e5 --t-ext 1e-5 --t-end 100 -n 100 --output dld1_lm4_t100
-cat dld1_lm5.na | ff-timecourse --rna turner2004 --macrostates dld1*.ms --k0 1e5 --t-ext 1e-5 --t-end 100 -n 100 --output dld1_lm5_t100
+cat dld1_lm2.na | ff-timecourse --rna turner2004 --macrostates dld1*.ms --k0 1e5 --t-sep 1e-5 --t-end 100 -n 100 --output dld1_lm2_t100
+cat dld1_lm4.na | ff-timecourse --rna turner2004 --macrostates dld1*.ms --k0 1e5 --t-sep 1e-5 --t-end 100 -n 100 --output dld1_lm4_t100
+cat dld1_lm5.na | ff-timecourse --rna turner2004 --macrostates dld1*.ms --k0 1e5 --t-sep 1e-5 --t-end 100 -n 100 --output dld1_lm5_t100
 
 ## Publication-style plots 
 python ../../py-utils/plot_anxy.py dld1_lm2_t100.nxy --t-split 1e-5 --split-pos 0.125 --title "100 aggregated, stochastic simulations" \

@@ -2,6 +2,14 @@
 
 All notable changes to this crate will be documented in this file.
 
+## development
+## Added
+- co-transcriptional folding support for ff-timecourse.
+- t-sep commandline parameter for timeline construction.
+
+## Changed
+- t-ext now explicit for co-transcriptional folding. 
+
 ## [0.4.2] - 2026-02-26
 ## Added
 - fasta flag for ff-trajectory

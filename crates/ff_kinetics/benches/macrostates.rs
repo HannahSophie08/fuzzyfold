@@ -22,7 +22,6 @@ use ff_kinetics::LoopNeighbors;
 use ff_kinetics::shift_policy;
 use ff_kinetics::SSA;
 use ff_kinetics::MacrostateRegistry;
-use ff_kinetics::MacrostateRegistryPL;
 
 const INPUT_L50: &str = concat!(env!("CARGO_MANIFEST_DIR"),
     "/benches/data/benchmark_random_structures_len50.vrna");
@@ -124,22 +123,6 @@ fn load_dbv_registries(
     }).collect()
 }
 
-fn load_pl_registries(
-    macrostates_path: &str,
-    inputs: &[(NucleotideVec, PairTable)],
-    emodel: &Arc<ViennaRNA>,
-) -> Vec<MacrostateRegistryPL<ViennaRNA>> {
-    let blocks = split_macrostate_blocks(macrostates_path);
-    assert_eq!(blocks.len(), inputs.len(),
-        "Macrostate block count must match input trajectory count");
-    blocks.iter().zip(inputs.iter()).map(|(block, (seq, _))| {
-        let mut registry = MacrostateRegistryPL::from((seq.clone(), emodel.clone()));
-        registry.insert_from_reader(Cursor::new(block.as_bytes()), macrostates_path)
-            .expect("Failed to parse macrostate block");
-        registry
-    }).collect()
-}
-
 // ---------------------------------------------------------------------------
 // DBV registry
 // ---------------------------------------------------------------------------
@@ -187,52 +170,6 @@ fn bench_classify_dbv(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// PL registry
-// ---------------------------------------------------------------------------
-
-fn bench_classify_pl(c: &mut Criterion) {
-    let emodel = Arc::new(ViennaRNA::default());
-    let rmodel = Arrhenius::new(emodel.temperature(), 1.0, None, None);
-    let mut group = c.benchmark_group("Classify macrostates (PL) during SSA");
-    group.measurement_time(std::time::Duration::from_secs(50));
-
-    for case in CASES {
-        let inputs = load_raw_inputs(case.inputs_path);
-        let registries = load_pl_registries(case.macrostates_path, &inputs, &emodel);
-        let mut rng = StdRng::seed_from_u64(42);
-
-        group.bench_function(format!("pl_{}", case.name), |b| {
-            b.iter_batched(
-                || inputs.iter().zip(registries.iter()).collect::<Vec<_>>(),
-                |pairs| {
-                    for ((seq, pt), registry) in pairs {
-                        let moves = LoopNeighbors::try_from((
-                            seq.clone(), pt, emodel.clone(), shift_policy::NoShift,
-                        ))
-                        .expect("Failed to build LoopNeighbors");
-                        let mut simulator = SSA::from((moves, rmodel));
-                        let mut classifications = 0usize;
-
-                        simulator.simulate(
-                            &mut rng,
-                            black_box(10.0),
-                            |_t, _tinc, _rsum, walker| {
-                                let s = walker.current_structure();
-                                classifications += registry.classify(&s);
-                                true
-                            },
-                        );
-                        black_box(classifications);
-                    }
-                },
-                BatchSize::LargeInput,
-            )
-        });
-    }
-    group.finish();
-}
-
-// ---------------------------------------------------------------------------
 // Isolated classify() — raw lookup cost without simulation noise.
 // ---------------------------------------------------------------------------
 
@@ -242,26 +179,15 @@ fn bench_classify_isolated(c: &mut Criterion) {
 
     let inputs = load_raw_inputs(INPUT_L50);
     let structures: Vec<DotBracketVec> = inputs.iter()
-        .map(|(_, pt)| DotBracketVec::try_from(pt).unwrap())
+        .map(|(_, pt)| DotBracketVec::from(pt))
         .collect();
 
     let dbv_registries = load_dbv_registries(MACROSTATES_L50, &inputs, &emodel);
-    let pl_registries  = load_pl_registries(MACROSTATES_L50, &inputs, &emodel);
 
     group.bench_function("isolated_dbv", |b| {
         b.iter(|| {
             let mut sum = 0usize;
             for (s, registry) in structures.iter().zip(dbv_registries.iter()) {
-                sum += registry.classify(black_box(s));
-            }
-            black_box(sum)
-        })
-    });
-
-    group.bench_function("isolated_pl", |b| {
-        b.iter(|| {
-            let mut sum = 0usize;
-            for (s, registry) in structures.iter().zip(pl_registries.iter()) {
                 sum += registry.classify(black_box(s));
             }
             black_box(sum)
@@ -274,7 +200,6 @@ fn bench_classify_isolated(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_classify_dbv,
-    bench_classify_pl,
     bench_classify_isolated,
 );
 criterion_main!(benches);

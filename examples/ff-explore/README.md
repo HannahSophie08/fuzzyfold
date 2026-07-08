@@ -14,7 +14,7 @@ Use this file as input to enumerate the neighborhood using base-pair moves. The 
 command returns all reachable structures with energy smaller or equal E(s) + 2.80 kcal/mol:
 
 ```bash
-cat dld1_lm3.na | ff-explore --delta 2.8 --sorted
+cat dld1_lm3.na | ff-explore --delta 2.8 --sorted --rna turner2004
 ```
 
 

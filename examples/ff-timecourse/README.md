@@ -1,5 +1,11 @@
 # Analyze changes of secondary-structure ensembles over time
-
+`ff-timecourse` performs multiple stochastic folding simulations in parallel and
+merges them into a unified timeline. This timeline then contains the occupancy
+of predefined macrostates over time. The simulation starts at a provided starting
+structure. If the strating structure is shorter than the corresponding sequence,
+co-transcriptonal trajectories are simulated and the parameter `--t-ext` must be 
+provided. Note that `ff-timecourse` collects data at specific time points. 
+ 
 ## Input files
 
 The file `dld1_lm3.na` contains a designed RNA sequence together with 

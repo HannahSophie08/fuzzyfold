@@ -7,11 +7,9 @@ pub mod enum_neighbors;
 mod rate_model;
 mod stochastic_simulation;
 mod macrostates;
-mod macrostates_pl;
 mod movesets;
 
 pub use rate_model::*;
 pub use stochastic_simulation::*;
 pub use macrostates::*;
-pub use macrostates_pl::*;
 pub use movesets::*;
