@@ -1,3 +1,4 @@
+//stamp
 use serde::{Serialize, Deserialize};
 use std::sync::Arc;
 use std::path::Path;
