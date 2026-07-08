@@ -26,7 +26,7 @@ pub fn plot_occupancy_over_time<E: EnergyModel>(
     ).unwrap();
 
 
-    let eps = 1e-19; // epsilon for plot labels
+    let eps = 1e-12; // epsilon for plot labels
     // Split into two panels: 50% for linear (left), 50% for log (right)
     let (left, right) = root.split_horizontally(512);
 
@@ -43,6 +43,7 @@ pub fn plot_occupancy_over_time<E: EnergyModel>(
         .configure_mesh()
         .y_desc("occupancy")
         .x_labels(6)
+        .x_label_formatter(&|x| if *x < 0.01 {format!("{:.1e}", x)} else {format!("{}", x)})  // scientific notation
         .y_labels(10)
         .light_line_style(RGBColor(220, 220, 220))
         .light_line_style(TRANSPARENT)
@@ -66,7 +67,7 @@ pub fn plot_occupancy_over_time<E: EnergyModel>(
         .margin_right(40)
         .x_label_area_size(40)
         .y_label_area_size(0) // hide y labels on right
-        .build_cartesian_2d(((t_lin - eps)..(t_log + eps)).log_scale(), 0.0..1.0)
+        .build_cartesian_2d(((t_lin+eps)..(t_log + eps)).log_scale(), 0.0..1.0)
         .unwrap();
 
     chart_right
@@ -132,7 +133,7 @@ pub fn plot_occupancy_over_time<E: EnergyModel>(
         )).unwrap();
 
         chart_left.draw_series(LineSeries::new(
-                series.iter().cloned().map(|(t, p, _)| (t, p)).filter(|(t, _)| *t <= t_lin),
+                series.iter().cloned().map(|(t, p, _)| (t, p)).filter(|(t, _)| *t <= t_lin + eps),
                 color.stroke_width(2),
         )).unwrap();
 
@@ -144,7 +145,7 @@ pub fn plot_occupancy_over_time<E: EnergyModel>(
         )).unwrap();
  
         chart_right.draw_series(LineSeries::new(
-            series.iter().cloned().map(|(t, p, _)| (t, p)).filter(|(t, _)| *t >= t_lin),
+            series.iter().cloned().map(|(t, p, _)| (t, p)).filter(|(t, _)| *t >= t_lin - eps),
             color.stroke_width(2),
         )).unwrap()
             .label(format!("{:20} {:>6.2}", name.trim(), energy))   // <-- label for legend

@@ -82,6 +82,14 @@ fn truncate(dbv: &DotBracketVec) -> DotBracketVec {
     DotBracketVec(truncated)
 }
 
+fn pad(dbv: &DotBracketVec, len: usize) -> DotBracketVec {
+    let mut padded = dbv.to_vec();
+    let extra = len.saturating_sub(padded.len());
+    padded.extend(std::iter::repeat_n(DotBracket::Unpaired, extra));
+    DotBracketVec(padded)
+}
+
+
 impl Macrostate {
     /// Initialize a catch-all macrostate. 
     /// (This is the default macrostate when initializing a MacrostateRegisty.)
@@ -165,13 +173,13 @@ impl Macrostate {
         self.min_length <= len && len <= self.max_length && self.ensemble.contains_key(&tdbv)
     }
 
-    pub fn get_lowest_microstate(&self) -> Option<&DotBracketVec> {
+    pub fn get_lowest_microstate(&self, len: usize) -> Option<DotBracketVec> {
         self.ensemble
             .iter()
             .min_by(|(_, (e_a, _)), (_, (e_b, _))| {
                 e_a.partial_cmp(e_b).unwrap_or(std::cmp::Ordering::Equal)
             })
-            .map(|(dbv, _)| dbv)
+            .map(|(dbv, _)| pad(dbv, len))
     }
 
     /// Randomly pick a structure according to its probability in the ensemble.

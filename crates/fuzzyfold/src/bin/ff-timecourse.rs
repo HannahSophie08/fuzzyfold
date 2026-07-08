@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::path::Path;
 use std::path::PathBuf;
 
-use plotters::prelude::LogScalable;
 use rayon::prelude::*;
 use rand::rng;
 use colored::*;
@@ -33,7 +32,7 @@ use fuzzyfold::energy_parsers::EnergyModelArguments;
 use fuzzyfold::kinetics_parsers::RateModelArguments;
 use fuzzyfold::kinetics_parsers::TimelineParameters;
 
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 #[command(version, about = "Stochastically simulated nucleic acid ensembles over time.")]
 pub struct Cli {
     /// Input file (FASTA-like), or "-" for stdin
@@ -97,7 +96,7 @@ fn main() -> Result<()> {
         let t_end = cli.simulation.t_end;
         let mut a = vec![t_ext; num_ext];
         a.push(t_end);
-        (a, t_ext * num_ext.as_f64() + t_end)
+        (a, t_ext * (num_ext as f64) + t_end)
     } else { 
         (vec![cli.simulation.t_end], cli.simulation.t_end)
     };
@@ -116,7 +115,7 @@ fn main() -> Result<()> {
         println!("{:4} {:<10} {:<} {:>5} {:>8.2}",
             id, 
             m.name(),
-            m.get_lowest_microstate().unwrap(),
+            m.get_lowest_microstate(sequence.len()).unwrap(),
             m.len(),
             m.ensemble_energy().unwrap());
     }

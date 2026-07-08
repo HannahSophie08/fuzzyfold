@@ -59,20 +59,19 @@ pub struct TimelineParameters {
     #[arg(long, default_value_t = 1.0)]
     pub t_end: f64,
 
-    /// Sets the end of a linear output time regime and start of a logarithmic one,
-    /// s.t. 0 < t-sep <= t-end.
-    ///
-    /// In full-length mode, defaults to 1/k0.
-    /// In a co-transcriptional simulation, defaults to the end of transcription.
+    /// Sets the end of a linear output time regime and start of a logarithmic one, s.t. 0 < t-sep
+    /// <= t-end. In full-length mode, defaults to 1/k0. In a co-transcriptional simulation,
+    /// defaults to the end of transcription.
     #[arg(long)]
     pub t_sep: Option<f64>,   
 
-    /// Number of time points on the linear scale.
+    /// Number of time points on the linear scale. Default = 0 is a hack to default to 1 in full-length mode,
+    /// and end-of-transcription in co-transcriptional mode.
     #[arg(long, default_value_t = 0)]
     pub t_lin: usize, 
 
     /// Number of time points on the logarithmic scale.
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, default_value_t = 50)]
     pub t_log: usize,
 }
 
@@ -89,7 +88,7 @@ impl TimelineParameters {
         if self.t_lin == 0 {
             // full-length mode or if t-sep is set.
             if self.t_ext.is_none() || self.t_sep.is_some() { 
-                self.t_lin = 1;
+                self.t_lin = 50;
             } else { // co-transcriptional mode
                 self.t_lin = num_ext;
             }
@@ -98,7 +97,7 @@ impl TimelineParameters {
         // Set default values for t_sep in case it is not set by user.
         if self.t_sep.is_none() {
             if self.t_ext.is_none() { // full-length mode
-                self.t_sep = Some(1.0/k0)
+                self.t_sep = Some(10.0/k0)
             } else { // co-transcriptional mode
                 self.t_sep = Some(self.t_ext.unwrap() * num_ext.as_f64());
             }
