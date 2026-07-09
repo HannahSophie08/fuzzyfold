@@ -309,11 +309,11 @@ impl ViennaRNA {
         let inner = PairTypeRNA::from((*revseq.first().unwrap(), *fwdseq.last().unwrap()));
         let pg1 = if outer.is_ap() { self.terminal_ap - self.terminal_ru }  
                     else if outer.is_iu() { self.terminal_iu - self.terminal_ru }
-                    else if outer.is_ci() { self.terminal_ci - self.terminal_ru }
+                    else if outer.is_ci() { self.terminal_ci }
                     else { 0 };
         let pg2 = if inner.is_ap() { self.terminal_ap - self.terminal_ru }
                     else if inner.is_iu() { self.terminal_iu - self.terminal_ru }
-                    else if inner.is_ci() { self.terminal_ci - self.terminal_ru }
+                    else if inner.is_ci() { self.terminal_ci }
                     else { 0 };
 
         let res = match (fwdseq.len(), revseq.len()) {
