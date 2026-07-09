@@ -1,6 +1,6 @@
 [package]
 name = "ff_kinetics"
-version = "0.1.2"
+version = "0.4.2"
 description = "fuzzyfold's stochastic secondary structure simulations."
 documentation = "https://docs.rs/ff_kinetics"
 keywords = ["dna", "rna", "secondary-structure", "kinetics", "nearest-neighbor"]
@@ -15,12 +15,13 @@ categories.workspace = true
 ff_structure.workspace = true
 ff_energy.workspace = true
 
-ahash.workspace = true
 criterion.workspace = true
+log.workspace = true
 nohash-hasher.workspace = true
 ndarray.workspace = true
 plotters.workspace = true
 rand.workspace = true
+rustc-hash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
@@ -28,12 +29,19 @@ bincode = "1.3"           # for compact binary serialization
 anyhow = "1.0.100"
 
 [[bench]]
+name = "explore"
+harness = false
+
+[[bench]]
 name = "stochastic_simulation"
 harness = false
 
 [[bench]]
-name = "exit_macrostates"
+name = "macrostates"
 harness = false
+
+[features]
+shift_analysis = []
 
 [badges]
 maintenance = { status = "actively-developed" }

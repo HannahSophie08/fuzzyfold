@@ -1,9 +1,8 @@
-//we need those
-use ahash::AHashSet;
-use ahash::AHashMap;
-use ff_energy::NucleotideVec;
+use rustc_hash::FxHashSet;
+use rustc_hash::FxHashMap;
 use rand::Rng;
 
+use ff_energy::NucleotideVec;
 use ff_structure::DotBracketVec;
 use ff_structure::PairTable;
 use ff_energy::EnergyModel;
@@ -51,7 +50,7 @@ fn find_neighbors<'a, E: EnergyModel, R: RateModel>(
             lss.undo_move(bp_move);
         } else {
             // Rate to step out of the macrostate => P(i|alpha) * k_{i->j}
-            let rate = origin.get(dbr).unwrap().1 * rate_model.rate(delta);
+            let rate = origin.get(dbr).unwrap().1 * rate_model.rate(bp_move, delta);
             neighbors
                 .entry(mdbr.clone())
                 .and_modify(|(e, k)| {
@@ -74,9 +73,10 @@ pub struct ExitMacrostate<'a> {
 
 impl<'a, E: EnergyModel, R: RateModel> From<(&'a Macrostate, &'a NucleotideVec, &'a E, &'a R)> for ExitMacrostate<'a> {
     fn from((parent_macrostate, sequence, energy_model, rate_model): (&'a Macrostate, &'a NucleotideVec, &'a E, &'a R)) -> Self {
-        let mut visited = AHashSet::default();
-        let mut ensemble = AHashMap::default();
+        let mut visited = FxHashSet::default();
+        let mut ensemble = FxHashMap::default();
         for dbr in parent_macrostate.ensemble().keys() {
+            dbr = pad(dbv, sequence.len());
             find_neighbors::<E, R>(
                 dbr,
                 None,
@@ -171,7 +171,7 @@ impl<'a, E: EnergyModel, R: RateModel>
         // Index 0 is unassigned, so just an empty placeholder.
         exit_macrostates.push(ExitMacrostate {
             parent_macrostate: &parent_registry.macrostates()[0],
-            ensemble: AHashMap::default(),
+            ensemble: FxHashMap::default(),
             k_alpha: 0.0,
         });
 
@@ -266,7 +266,7 @@ mod tests {
             &energy_model
         );
 
-        let rate_model = Metropolis::new(energy_model.temperature(), 1.0);
+        let rate_model = Arrhenius::new(energy_model.temperature(), 1.0, None, None);
         let neighbors = ExitMacrostate::from((
             &macrostate, 
             &seq, 

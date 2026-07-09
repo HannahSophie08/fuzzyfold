@@ -1,15 +1,16 @@
 pub mod timeline;
 pub mod timeline_io;
 pub mod timeline_plotting;
-pub mod reaction;
+pub mod rate_tree;
+pub mod enum_neighbors;
 pub mod commit_and_delay;
 
 mod rate_model;
-mod loop_structure;
 mod stochastic_simulation;
 mod macrostates;
+mod movesets;
 
 pub use rate_model::*;
-pub use loop_structure::*;
 pub use stochastic_simulation::*;
 pub use macrostates::*;
+pub use movesets::*;

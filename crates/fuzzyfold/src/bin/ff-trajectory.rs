@@ -1,84 +1,185 @@
-use clap::Args;
 use clap::Parser;
-use colored::*;
 use anyhow::Result;
-
+use colored::*;
 use rand::rng;
+use std::sync::Arc;
+
 use ff_structure::PairTable;
 use ff_energy::EnergyModel;
-use ff_kinetics::LoopStructure;
-use ff_kinetics::LoopStructureSSA;
-use ff_kinetics::Metropolis;
+use ff_kinetics::RateModel;
+use ff_kinetics::Walker;
+use ff_kinetics::LoopNeighbors;
+use ff_kinetics::shift_policy;
+use ff_kinetics::SSA;
 
-use fuzzyfold::input_parsers::read_fasta_like_input;
+use fuzzyfold::input_parsers::read_cotr_input;
+use fuzzyfold::input_parsers::read_eval_input;
+use fuzzyfold::input_parsers::read_fasta_input;
 use fuzzyfold::energy_parsers::EnergyModelArguments;
+use fuzzyfold::kinetics_parsers::RateModelArguments;
 //TODO: support seeded rng.
 
-#[derive(Debug, Args)]
-pub struct RateModelParams {
-    /// Metropolis rate constant (must be > 0).
-    #[arg(long, default_value_t = 1.0)]
-    pub k0: f64,
-}
-
 #[derive(Debug, Parser)]
-#[command(name = "ff-simulate")]
 #[command(version, about = "Stochastic Simulation Algorithm for RNA folding")]
 pub struct Cli {
     /// Input file (FASTA-like), or "-" for stdin
     #[arg(value_name = "INPUT", default_value = "-")]
     input: String,
 
-    /// Simulation stop time.
+    /// Read input as standard FASTA (DNA alphabet, multi-line sequence, no structure)
+    #[arg(long)]
+    fasta: bool,
+
+    /// Simulation time at the full-length molecule.
     #[arg(long, default_value_t = 1.0)]
     t_end: f64,
 
-    #[command(flatten, next_help_heading = "Kinetic model parameters")]
-    kinetics: RateModelParams,
+    /// Optional simulation time per nucleotide during co-transcriptional folding.
+    #[arg(long)]
+    t_ext: Option<f64>,
+
+    /// Set the number of simulation steps (ignore t_end!!)
+    #[arg(long, hide = true, default_value_t = 0)]
+    num_steps: usize,
+
+    /// Do not print trajectory, only last structure.
+    #[arg(long)]
+    silent: bool, 
 
     #[command(flatten, next_help_heading = "Energy model parameters")]
     energy: EnergyModelArguments,
+
+    #[command(flatten, next_help_heading = "Kinetic model parameters")]
+    kinetics: RateModelArguments,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let emodel = Arc::new(cli.energy.build_model());
+    let rmodel = cli.kinetics.build_model(emodel.temperature());
 
-    // --- Build simulator ---
-    let emodel = cli.energy.build_model();
-    let rmodel = Metropolis::new(emodel.temperature(), cli.kinetics.k0);
+    let is_rna = cli.energy.dna.is_none();
+    let (header, sequence, structure) =
+        if cli.fasta {
+            read_fasta_input(&cli.input, true)?  // is_rna is ignored, assuming DNA alphabet
+        } else if cli.t_ext.is_some() {
+            read_cotr_input(&cli.input, is_rna)?
+        } else {
+            match read_eval_input(&cli.input, is_rna) {
+                Ok(v) => v,
+                Err(e) => return Err(anyhow::anyhow!("{e} (or use --t-ext?)")),
+            }
+        };
 
-    let (header, sequence, structure) = read_fasta_like_input(&cli.input)?;
     let pairings = PairTable::try_from(&structure)?;
     if let Some(h) = header {
         println!("{}", h.yellow())
     }
-    println!("{} {:>8} {:>14} -> {:>14} {:>15}",
+    println!("{} {:>8} {:>14} {:>14} {:>15}",
         sequence,
         "energy".green(),
-        "arivaltime".cyan(),
-        "waitingtime".cyan(),
+        "arrival-time".cyan(),
+        "waiting-time".cyan(),
         "mean-waiting".cyan(),
     );
 
-    let loops = LoopStructure::try_from((&sequence[..], &pairings, &emodel)).unwrap();
-    let mut simulator = LoopStructureSSA::from((loops, &rmodel));
+    let times: Vec<f64> = if let Some(t_ext) = cli.t_ext {
+        let mut v = vec![t_ext; sequence.len() - structure.len()];
+        v.push(cli.t_end);
+        v
+    } else { 
+        vec![cli.t_end] 
+    };
 
-    simulator.simulate(
-        &mut rng(), 
-        cli.t_end, 
-        |t, tinc, flux, ls| {
-            println!("{} {:8.2} {:14.8e} -> {:14.8e} {:15.8e}",
-                ls,
-                ls.energy() as f64 / 100.,
-                t,
-                t + tinc,
-                1.0 / flux,
-            );
-            true
+    match (rmodel.k3ws().is_some(), rmodel.k4ws().is_some()) {
+        (false, false) => {
+            let moves = LoopNeighbors::try_from((sequence, &pairings, emodel, shift_policy::NoShift))
+                .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
+            run_simulator(moves, rmodel, &times, cli.silent, cli.num_steps);
         },
-    );
+        (true, false) => {
+            let moves = LoopNeighbors::try_from((sequence, &pairings, emodel, shift_policy::ThreeWayOnly))
+                .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
+            run_simulator(moves, rmodel, &times, cli.silent, cli.num_steps);
+        },
+        (false, true) => {
+            let moves = LoopNeighbors::try_from((sequence, &pairings, emodel, shift_policy::FourWayOnly))
+                .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
+            run_simulator(moves, rmodel, &times, cli.silent, cli.num_steps);
+        },
+        (true, true) => {
+            let moves = LoopNeighbors::try_from((sequence, &pairings, emodel, shift_policy::ThreeAndFour))
+                .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
+            run_simulator(moves, rmodel, &times, cli.silent, cli.num_steps);
+        },
+    }
+
     Ok(())
 }
 
 
+fn run_simulator<W: Walker + std::fmt::Display, K: RateModel>(
+    moves: W,
+    rmodel: K,
+    times: &[f64],
+    silent: bool,
+    num_steps: usize,
+)
+where
+    SSA<W, K>: From<(W, K)>,
+{
+    let mut simulator = SSA::from((moves, rmodel));
 
+    match (silent, num_steps) {
+        (true, 0) => {
+            simulator.co_simulate(&mut rng(), times, |_, _, _, _|  true);
+            let cs = simulator.current_structure();
+            let en = simulator.current_energy();
+            println!("{} {:8.2}", cs, en as f64 / 100.);
+        },
+        (false, 0) => {
+            simulator.co_simulate(&mut rng(), times, 
+                |t, tinc, flux, w| {
+                    println!("{} {:8.2} {:14.8e} {:14.8e} {:15.8e}",
+                        w,
+                        w.current_energy() as f64 / 100.,
+                        t,
+                        tinc,
+                        1.0 / flux,
+                    );
+                    true
+                });
+        },
+        (true, _) => {
+            if times.len() > 1 {
+                panic!("no support for co-transcriptional num-steps.")
+            }
+            let mut steps = 0;
+            simulator.simulate(&mut rng(), f64::MAX, |_, _, _, _| {
+                steps += 1;
+                steps < num_steps 
+            });
+            let ls = simulator.current_structure();
+            let en = simulator.current_energy();
+            println!("{} {:8.2}", ls, en as f64 / 100.);
+        },
+        (false, _) => {
+            if times.len() > 1 {
+                panic!("no support for co-transcriptional num-steps.")
+            }
+            let mut steps = 0;
+            simulator.simulate(&mut rng(), f64::MAX, 
+                |t, tinc, flux, w| {
+                    println!("{} {:8.2} {:14.8e} {:14.8e} {:15.8e}",
+                        w,
+                        w.current_energy() as f64 / 100.,
+                        t,
+                        tinc,
+                        1.0 / flux,
+                    );
+                    steps += 1;
+                    steps < num_steps 
+                });
+        },
+    }
+}

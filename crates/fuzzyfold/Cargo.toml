@@ -1,6 +1,6 @@
 [package]
 name = "fuzzyfold"
-version = "0.1.2"
+version = "0.4.2"
 description = "Nucleic acid secondary structure kinetics."
 documentation = "https://docs.rs/fuzzyfold"
 keywords = ["dna", "rna", "secondary-structure", "kinetics", "nearest-neighbor"]
@@ -14,12 +14,16 @@ categories.workspace = true
 autobins = false
 
 [[bin]]
+name = "ff-randseq"
+path = "src/bin/ff-randseq.rs"
+
+[[bin]]
 name = "ff-eval"
 path = "src/bin/ff-eval.rs"
 
 [[bin]]
-name = "ff-randseq"
-path = "src/bin/ff-randseq.rs"
+name = "ff-explore"
+path = "src/bin/ff-explore.rs"
 
 [[bin]]
 name = "ff-timecourse"
@@ -33,7 +37,6 @@ path = "src/bin/ff-trajectory.rs"
 name = "ff-transitions"
 path = "src/bin/ff-transitions.rs"
 
-
 [dependencies]
 ff_structure.workspace = true
 ff_energy.workspace = true
@@ -45,10 +48,11 @@ log.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+plotters.workspace = true
 
 anyhow = "1.0.100"
-clap = { version = "4.5.47", features = ["derive"] }
-indicatif = "0.18.0"
+clap = { version = "4.5.54", features = ["derive"] }
+indicatif = "0.18.3"
 paste = "1.0.15"
 rayon = "1.11.0"
 

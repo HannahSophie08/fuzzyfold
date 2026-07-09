@@ -7,20 +7,17 @@ use paste::paste;
 use ff_structure::DotBracketVec;
 use ff_energy::NucleotideVec;
 
-// ============================================================
-//  Generic FASTA-like parser supporting lenient/strict modes
-// ============================================================
-
 #[derive(Clone, Copy)]
-enum FastaMode {
+enum NAMode {
     Lenient,
     Strict,
 }
 
 /// Core parsing logic shared by all adapters.
-fn parse_fasta_like<R: BufRead>(
+fn parse_na_format<R: BufRead>(
     reader: R,
-    mode: FastaMode,
+    mode: NAMode,
+    is_rna: bool,
 ) -> Result<(Option<String>, NucleotideVec, DotBracketVec)> {
     let mut header: Option<String> = None;
     let mut sequence: Option<NucleotideVec> = None;
@@ -41,8 +38,11 @@ fn parse_fasta_like<R: BufRead>(
             header = Some(line.to_string());
         } else if sequence.is_none() {
             let token = line.split_whitespace().next().unwrap();
-            sequence = Some(NucleotideVec::from_lossy(token));
-            //sequence = Some(NucleotideVec::try_from(token)?);
+            if is_rna {
+                sequence = Some(NucleotideVec::try_from_rna(token)?);
+            } else {
+                sequence = Some(NucleotideVec::try_from_dna(token)?);
+            }
         } else if structure.is_none() {
             let token = line.split_whitespace().next().unwrap();
             structure = Some(DotBracketVec::try_from(token)?);
@@ -53,21 +53,66 @@ fn parse_fasta_like<R: BufRead>(
     let sequence = sequence.ok_or_else(|| anyhow!("Missing sequence line"))?;
 
     let structure = match (structure, mode) {
-        (Some(s), _) => s,
-        (None, FastaMode::Lenient) => {
-            DotBracketVec::try_from(".".repeat(sequence.len()).as_str())
+        (Some(s), NAMode::Strict) => {
+            if sequence.len() != s.len() {
+                return Err(anyhow!(
+                        "Sequence length ({}) and structure length ({}) do not match",
+                        sequence.len(),
+                        s.len()
+                ));
+            }
+            s
+        },
+        (None, NAMode::Strict) => return Err(anyhow!("Missing structure line")),
+
+        (Some(s), NAMode::Lenient) => {
+            if sequence.len() < s.len() {
+                return Err(anyhow!(
+                        "Structure is longer than sequence ({} > {}).",
+                        s.len(), sequence.len()
+                ));
+            }
+            s
+        },
+
+        (None, NAMode::Lenient) => {
+            DotBracketVec::try_from(".")
                 .expect("Failed to construct open-chain structure")
         }
-        (None, FastaMode::Strict) => return Err(anyhow!("Missing structure line")),
     };
 
-    if sequence.len() != structure.len() {
-        return Err(anyhow!(
-            "Sequence length ({}) and structure length ({}) do not match",
-            sequence.len(),
-            structure.len()
-        ));
+    Ok((header, sequence, structure))
+}
+
+fn read_fasta<R: BufRead>(reader: R, _rna: bool
+) -> Result<(Option<String>, NucleotideVec, DotBracketVec)> {
+    let mut header: Option<String> = None;
+    let mut seq_chars = String::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        let line = line.trim();
+        if line.is_empty() {
+            if !seq_chars.is_empty() { break; }
+            continue;
+        }
+        if line.starts_with('>') {
+            if seq_chars.is_empty() {
+                header = Some(line.to_string());
+            } else {
+                break; // next record
+            }
+        } else {
+            seq_chars.push_str(line);
+        }
     }
+
+    if seq_chars.is_empty() {
+        return Err(anyhow!("Missing sequence"));
+    }
+
+    let sequence = NucleotideVec::try_from_dna(&seq_chars)?;
+    let structure = DotBracketVec::try_from(".").expect("open-chain fallback");
 
     Ok((header, sequence, structure))
 }
@@ -76,12 +121,12 @@ fn parse_fasta_like<R: BufRead>(
 //  Base parser functions (lenient and strict variants)
 // ============================================================
 
-pub fn read_fasta_like<R: BufRead>(reader: R) -> Result<(Option<String>, NucleotideVec, DotBracketVec)> {
-    parse_fasta_like(reader, FastaMode::Lenient)
+pub fn read_cotr<R: BufRead>(reader: R, is_rna: bool) -> Result<(Option<String>, NucleotideVec, DotBracketVec)> {
+    parse_na_format(reader, NAMode::Lenient, is_rna)
 }
 
-pub fn read_eval<R: BufRead>(reader: R) -> Result<(Option<String>, NucleotideVec, DotBracketVec)> {
-    parse_fasta_like(reader, FastaMode::Strict)
+pub fn read_eval<R: BufRead>(reader: R, is_rna: bool) -> Result<(Option<String>, NucleotideVec, DotBracketVec)> {
+    parse_na_format(reader, NAMode::Strict, is_rna)
 }
 
 // ============================================================
@@ -98,34 +143,34 @@ pub fn read_eval<R: BufRead>(reader: R) -> Result<(Option<String>, NucleotideVec
 ///
 /// Example:
 /// ```ignore
-/// define_input_variants!(read_fasta_like, Result<(Option<String>, NucleotideVec, DotBracketVec)>);
+/// define_input_variants!(read_na_format, Result<(Option<String>, NucleotideVec, DotBracketVec)>);
 /// ```
 macro_rules! define_input_variants {
     ($base:ident, $ret:ty) => {
         paste! {
             /// Read from a string buffer.
-            pub fn [<$base _string>](s: &str) -> $ret {
-                $base(Cursor::new(s))
+            pub fn [<$base _string>](s: &str, rna: bool) -> $ret {
+                $base(Cursor::new(s), rna)
             }
 
             /// Read from a file path.
-            pub fn [<$base _file>]<P: AsRef<Path>>(path: P) -> $ret {
+            pub fn [<$base _file>]<P: AsRef<Path>>(path: P, rna: bool) -> $ret {
                 let reader = BufReader::new(File::open(path)?);
-                $base(reader)
+                $base(reader, rna)
             }
 
             /// Read from stdin.
-            pub fn [<$base _stdin>]() -> $ret {
+            pub fn [<$base _stdin>](rna: bool) -> $ret {
                 let reader = BufReader::new(stdin());
-                $base(reader)
+                $base(reader, rna)
             }
 
             /// Read either from stdin ("-") or a file path.
-            pub fn [<$base _input>](s: &str) -> $ret {
+            pub fn [<$base _input>](s: &str, rna: bool) -> $ret {
                 if s == "-" {
-                    [<$base _stdin>]()
+                    [<$base _stdin>](rna)
                 } else {
-                    [<$base _file>](s)
+                    [<$base _file>](s, rna)
                 }
             }
         }
@@ -136,10 +181,11 @@ macro_rules! define_input_variants {
 //  Apply macro to generate adapters for both variants
 // ============================================================
 
-type FastaResult = Result<(Option<String>, NucleotideVec, DotBracketVec)>;
+type NAResult = Result<(Option<String>, NucleotideVec, DotBracketVec)>;
 
-define_input_variants!(read_fasta_like, FastaResult);
-define_input_variants!(read_eval, FastaResult);
+define_input_variants!(read_cotr, NAResult);
+define_input_variants!(read_eval, NAResult);
+define_input_variants!(read_fasta, NAResult);
 
 // ============================================================
 //  Example helper: ruler()
@@ -183,22 +229,28 @@ mod tests {
     }
 
     #[test]
-    fn test_read_fasta_like_basic() {
+    fn test_read_cotr_input() {
         let input = ">test\nACGU\n....\n";
-        let (hdr, seq, dbv) = read_fasta_like_string(input).unwrap();
+        let (hdr, seq, dbv) = read_cotr_string(input, true).unwrap();
         assert_eq!(hdr, Some(">test".into()));
         assert_eq!(seq.to_string(), "ACGU");
         assert_eq!(dbv.to_string(), "....");
+
+        let input = ">test\nACGU";
+        let (hdr, seq, dbv) = read_cotr_string(input, true).unwrap();
+        assert_eq!(hdr, Some(">test".into()));
+        assert_eq!(seq.to_string(), "ACGU");
+        assert_eq!(dbv.to_string(), ".");
     }
 
     #[test]
-    fn test_read_eval_input_strict_mode() {
+    fn test_read_eval_input() {
         let input = ">test\nACGU\n....\n";
-        let ok = read_eval_string(input);
+        let ok = read_eval_string(input, true);
         assert!(ok.is_ok());
 
         let missing = ">test\nACGU\n";
-        let err = read_eval_string(missing);
+        let err = read_eval_string(missing, true);
         assert!(err.is_err(), "Missing structure line should fail in strict mode");
     }
 }

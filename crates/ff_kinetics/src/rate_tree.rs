@@ -1,0 +1,226 @@
+use rustc_hash::FxHashMap;
+
+use crate::Move;
+
+#[derive(Clone, Debug)]
+struct MoveNode {
+    rate: f64,
+    rate_sum: f64,
+    mv: Move,
+}
+
+/// A binary tree storing all possible moves.
+pub struct RateTree {
+    /// A 1-based vector of Moves.
+    entries: Vec<MoveNode>,
+    /// To access the index given the Move.
+    pos_map: FxHashMap<Move, usize>,
+}
+
+impl Default for RateTree {
+    fn default() -> Self {
+        let entries = vec![MoveNode {
+            rate: 0.0,
+            rate_sum: 0.0,
+            mv: Move::Add { i: 0, j: 0 },
+        }];
+
+        Self {
+            entries,
+            pos_map: FxHashMap::default(),
+        }
+    }
+}
+
+impl RateTree {
+    pub fn dump_by_rate(&self) {
+        let mut items: Vec<_> = self.entries.iter().collect();
+
+        // Skip the dummy 0th entry if that's intentional
+        items.sort_by(|a, b| b.rate.partial_cmp(&a.rate).unwrap());
+
+        for node in items {
+            println!(
+                "{:>12.5e}  {:?}",
+                node.rate,
+                node.mv
+            );
+        }
+    }
+}
+
+impl RateTree {
+
+    pub fn len(&self) -> usize {
+        self.entries.len() - 1
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.len() == 1
+    }
+
+    pub fn total_rate(&self) -> f64 {
+        if self.is_empty() {
+            0.0
+        } else {
+            self.entries[1].rate_sum
+        }
+    }
+    
+    pub fn init_insert(&mut self, mv: Move, rate: f64) {
+        debug_assert!(rate > 0.0);
+        let idx = self.entries.len();
+
+        self.entries.push(MoveNode {
+            rate,
+            rate_sum: rate,
+            mv,
+        });
+
+        self.pos_map.insert(mv, idx);
+    }
+
+    pub fn init_partial_sums(&mut self) {
+        for i in (1..=self.parent_idx(self.entries.len() - 1)).rev() {
+            let mut sum = self.entries[i].rate;
+            if let Some((_, entry)) = self.left_child(i) {
+                sum += entry.rate_sum;
+                if let Some((_, entry)) = self.right_child(i) {
+                    sum += entry.rate_sum;
+                }
+            }
+            self.entries[i].rate_sum = sum;
+        }
+    }
+
+    fn parent_idx(&self, i: usize) -> usize {
+        i/2
+    }
+
+    fn left_child(&self, i: usize) -> Option<(usize, &MoveNode)>{
+        let pos = 2 * i;
+        if pos < self.entries.len() {
+            Some((pos, &self.entries[pos]))
+        } else {
+            None
+        }
+    }
+
+    fn right_child(&self, i: usize) -> Option<(usize, &MoveNode)>{
+        let pos = 2 * i + 1;
+        if pos < self.entries.len() {
+            Some((pos, &self.entries[pos]))
+        } else {
+            None
+        }
+    }
+
+    fn update_partial_sums(&mut self, mut i: usize) {
+        while i >= 1 {
+            let mut sum = self.entries[i].rate;
+            if let Some((_, entry)) = self.left_child(i) {
+                sum += entry.rate_sum;
+                if let Some((_, entry)) = self.right_child(i) {
+                    sum += entry.rate_sum;
+                }
+                // NOTE: Floating-point comparison. We don't know how small rates may be in
+                // practice. This captures when continuation makes certainly no difference.
+                if self.entries[i].rate_sum == sum {
+                    break;
+                }
+            }
+            self.entries[i].rate_sum = sum;
+            if i == 1 {
+                break;
+            }
+            i = self.parent_idx(i);
+        }
+    }
+
+    pub fn insert(&mut self, mv: Move, rate: f64) {
+        debug_assert!(rate > 0.0);
+        let idx = self.entries.len();
+
+        self.entries.push(MoveNode {
+            rate,
+            rate_sum: rate,
+            mv,
+        });
+
+        self.pos_map.insert(mv, idx);
+        self.update_partial_sums(self.parent_idx(idx));
+    }
+
+    pub fn update_rate(&mut self, mv: &Move, new_rate: f64) -> bool {
+        debug_assert!(new_rate > 0.0);
+        if let Some(&idx) = self.pos_map.get(mv) {
+            self.entries[idx].rate = new_rate;
+            self.update_partial_sums(idx);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn replace(&mut self, old_mv: &Move, new_mv: &Move, new_rate: f64) -> bool {
+        debug_assert!(new_rate > 0.0);
+        let idx = match self.pos_map.remove(old_mv) {
+            Some(i) => i,
+            None => return false,
+        };
+        self.pos_map.insert(*new_mv, idx);
+        self.entries[idx].mv = *new_mv;
+        self.entries[idx].rate = new_rate;
+        self.update_partial_sums(idx);
+        true
+    }
+
+    pub fn remove(&mut self, mv: Move) -> bool {
+        let idx = match self.pos_map.remove(&mv) {
+            Some(i) => i,
+            None => return false,
+        };
+
+        let last = self.entries.len() - 1;
+
+        if idx != last {
+            let last_node = self.entries[last].clone();
+            self.pos_map.insert(last_node.mv, idx);
+            self.entries[idx] = last_node;
+            self.update_partial_sums(idx);
+        }
+
+        self.entries.pop();
+        if last >= 1 {
+            self.update_partial_sums(self.parent_idx(last));
+        }
+        true
+    }
+
+    pub fn select_by_threshold(&self, mut thresh: f64) -> Option<Move> {
+        let mut i = 1;
+        while i < self.entries.len() {
+            let node = &self.entries[i];
+            thresh -= node.rate;
+            if thresh <= 0.0 {
+                return Some(node.mv);
+            }
+            if let Some((l, entry)) = self.left_child(i) {
+                if thresh < entry.rate_sum {
+                    i = l;
+                    continue;
+                } else {
+                    thresh -= entry.rate_sum;
+                    i = l + 1;
+                }
+            } else {
+                break;
+            }
+        }
+        eprintln!("RateTree: roundoff error! This should be extremely rare!");
+        self.entries
+            .last()
+            .map(|n| n.mv)
+    }
+}
+

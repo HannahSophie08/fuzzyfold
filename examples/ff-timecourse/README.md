@@ -1,0 +1,109 @@
+# Analyze changes of secondary-structure ensembles over time
+`ff-timecourse` performs multiple stochastic folding simulations in parallel and
+merges them into a unified timeline. This timeline then contains the occupancy
+of predefined macrostates over time. The simulation starts at a provided starting
+structure. If the strating structure is shorter than the corresponding sequence,
+co-transcriptonal trajectories are simulated and the parameter `--t-ext` must be 
+provided. Note that `ff-timecourse` collects data at specific time points. 
+ 
+## Input files
+
+The file `dld1_lm3.na` contains a designed RNA sequence together with 
+an initial conformation:
+
+```fasta
+>dld1
+UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC
+.((((....)))).((((........))))...............
+```
+
+*(The file name itself is arbitrary but indicates that this structure
+corresponds to 'local minimum 3'.)*
+
+---
+
+### Macro-states
+
+To partition the overall secondary-structure ensemble into smaller ensembles of
+interest, we define **macro-states** using files such as `dld1_lm*.ms`.
+
+Example (`dld1_lm3_3.0.ms`):
+
+```fasta
+>LM3 lmin=lm3_bh=3.0
+UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC
+.((((....)))).((((........))))...............
+.((((....)))).((((.(....).))))...............
+.((((....))))..(((........)))................
+.((((....)))).((((.(.....)))))...............
+.(((......))).((((........))))...............
+..(((....)))..((((........))))...............
+.(((......)))..(((........)))................
+.(((.(...)))).((((........))))...............
+```
+
+Here:
+- The first line defines the **macro-state name** (`LM3`) and, optionally, some more description after a white-space (`lmin=lm3_bh=3.0`).
+- The second line specifies the **sequence**.
+- The remaining lines list all **secondary structures** that belong to this macro-state.
+
+Note that the starting structure from `dld1_lm3.na` is part of this macro-state.
+
+---
+
+## Simulation setup
+
+To simulate 100 trajectories starting in a specific lm3 conformation:
+
+```bash
+ff-timecourse --macrostates dld1*.ms --t-end 1 -n 100 --output dld1_lm3_t1 dld1_lm3.na
+```
+
+or, if you use pipes:
+
+```bash
+cat dld1_lm3.na | ff-timecourse --macrostates dld1*.ms --t-end 1 -n 100 --output dld1_lm3_t1
+```
+
+To familiarize yourself with the default timeline parameters `--t-lin`,
+`--t-log`, `--t-sep`, and `--t-ext` for output analysis, see:
+
+```bash
+ff-timecourse --help
+```
+
+During execution, the program prints simulation parameters to `STDOUT`,
+displays a **progress bar**, and finally reports the results in different output 
+file formats: 
+ - dld1_lm3_t1.tln: The "timeline" data that gets reloaded when another run is performed.
+ - dld1_lm3_t1.nxy: The simulation result in nxy format (for custom plotting).
+ - dld1_lm3_t1.svg: A default SVG plot of the simulation results.
+
+---
+
+## Aggregating data from multiple simulations
+
+To reduce statistical noise in ensemble dynamics, you may want to perform
+**many more trajectories**, potentially for longer time periods.  You can
+*accumulate results incrementally* by reloading existing timelines.
+In fact, this happens **automatically**, if a `*.tln` file exists that 
+matches your `--output name`. Note, timelines can only be merged, if the 
+timeline parameters do not change between calls!
+
+For example:
+
+```bash
+cat dld1_lm3.na | ff-timecourse --macrostates dld1*.ms --t-end 1 -n 900 --output dld1_lm3_t1
+```
+
+This command updates `dld1_lm3_t1.tln`, to include the results from the additional 900 simulations.
+Running the same command again will automatically reload the file, add another
+900 simulations, and update the stored timeline accordingly.
+
+Try it! This is the recommended way to extend your simulation dataset without
+restarting from scratch.
+
+An output file from $20 000$ aggregated simulations should look like this:
+
+![Timecourse plot](result_dld1_lm3_t1.svg)
+

@@ -1,34 +1,65 @@
 //! The nearest neighbor loop representations. 
 //!
-//! NOTE: We may update this to use ff_structure::Pair in the future,
+//! We may update this to use ff_structure::Pair in the future,
 //! so that we get (NAIDX, NAIDX) -> P1KEY conversions out of the box.
 //!
 
 use std::fmt;
-use std::ops::Range;
+use std::ops::RangeInclusive;
 use colored::*;
 
 use ff_structure::NAIDX;
-use ff_structure::P1KEY;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Types of nearest neighbor loops.
+///
+/// The loops store different combinations of indices (typically u16) that can be used extract
+/// relevant Bases from the corresponding sequence. Indices are given in canonical form: (i < j) <
+/// (p < q). (There is only one exception to this rule, the ends of JointExterior.)
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NearestNeighborLoop {
     Hairpin {
-        closing: (NAIDX, NAIDX), // (i, j)
+        closing: (NAIDX, NAIDX), 
     },
+
     Interior {
         closing: (NAIDX, NAIDX),
         inner: (NAIDX, NAIDX),
     },
+
     Multibranch {
         closing: (NAIDX, NAIDX),
         //NOTE: this list must ALWAYS be in 5'->3' order.
         branches: Vec<(NAIDX, NAIDX)>,
     },
+
+    /// The "standard" exterior loop, which is the outer-most decomposition of a
+    /// single complex 5' to 3' end. For this loop, the index of the 5' end is
+    /// smaller than the index of the 3' end.
     Exterior {
+        /// The index of the 5' end, followed by the index of the 3' end.
+        ends: (NAIDX, NAIDX),
         //NOTE: this list must ALWAYS be in 5'->3' order.
         branches: Vec<(NAIDX, NAIDX)>,
     },
+
+    /// The "joint" exterior loop is one that joins two complexes.
+    /// It can be recognized by the fact that the index of the 5' end is 
+    /// *larger* than the index of the 3' end.
+    /// Evaluation of this loop typically requires rotations out of the 
+    /// canonical form, where branches are sorted by index. The first
+    /// branch is also the "closing" pair.
+    JointExterior { 
+        /// The index of the 5' end, followed by the index of the 3' end.
+        ends: (NAIDX, NAIDX), //5' end, 3' end.
+        //NOTE: this list must ALWAYS be in 5'->3' order.
+        branches: Vec<(NAIDX, NAIDX)>,
+    },
+
+    /// This is not a NN loop.
+    Disconnected {
+        left: Box<NearestNeighborLoop>,
+        right: Box<NearestNeighborLoop>,
+    }
 }
 
 impl fmt::Display for NearestNeighborLoop {
@@ -50,13 +81,25 @@ impl fmt::Display for NearestNeighborLoop {
                     .collect::<Vec<_>>()
                     .join(", "))
             }
-            Self::Exterior { branches } => {
-                write!(f, "{:<8}             {}", 
-                    "Exterior".cyan().bold(), 
+            Self::Exterior { ends: (i, j), branches } => {
+                write!(f, "{:<8} [{:>3}, {:>3}], {}", 
+                    "Exterior".cyan().bold(), i, j,
                     branches.iter()
                     .map(|(i, j)| format!("[{:>3}, {:>3}]", i, j))
                     .collect::<Vec<_>>()
                     .join(", "))
+            }
+            Self::JointExterior { ends: (i, j), branches } => {
+                write!(f, "{:<8} [{:>3}, {:>3}], {}", 
+                    "Jxterior".red().bold(), i, j,
+                    branches.iter()
+                    .map(|(i, j)| format!("[{:>3}, {:>3}]", i, j))
+                    .collect::<Vec<_>>()
+                    .join(", "))
+            }
+            Self::Disconnected{ .. } => {
+                //TODO
+                write!(f, "{:<8} ", "Disconnected!".red().bold())
             }
         }
     }
@@ -64,7 +107,7 @@ impl fmt::Display for NearestNeighborLoop {
 
 impl NearestNeighborLoop {
 
-    /// Return all base pairs (closing, inner, and/or branches) contained in this loop.
+    /// Return all base pairs (closing, inner, and/or branches) adjacent to this loop.
     pub fn pairs(&self) -> Vec<(NAIDX, NAIDX)> {
         match self {
             NearestNeighborLoop::Hairpin { closing } => vec![*closing],
@@ -75,48 +118,32 @@ impl NearestNeighborLoop {
                 pairs.extend(branches.iter().cloned());
                 pairs
             }
-            NearestNeighborLoop::Exterior { branches } => branches.clone(),
+            NearestNeighborLoop::Exterior { branches, .. } => branches.clone(),
+            NearestNeighborLoop::JointExterior { branches, .. } => branches.clone(),
+            NearestNeighborLoop::Disconnected { .. } => todo!("For now, get this explicitly for the disconnected components!"),
         }
     }
 
-    /// Return all base pairs (closing, inner, and/or branches) as packed P1KEY.
-    /// Exterior loops use 0 as a sentinel closing key.
-    pub fn loop_key(&self) -> Vec<P1KEY> {
-        fn pack(i: NAIDX, j: NAIDX) -> P1KEY {
-            ((i as P1KEY) << NAIDX::BITS) | (j as P1KEY)
-        }
-
+    pub fn is_stack(&self) -> bool {
         match self {
-            NearestNeighborLoop::Hairpin { closing } => {
-                vec![pack(closing.0, closing.1)]
+            NearestNeighborLoop::Interior { closing: (i, j), inner: (p, q) } => {
+                *p == i+1 && *j == q+1
             }
-            NearestNeighborLoop::Interior { closing, inner } => {
-                vec![
-                    pack(closing.0, closing.1),
-                    pack(inner.0, inner.1),
-                ]
-            }
-            NearestNeighborLoop::Multibranch { closing, branches } => {
-                let mut keys = Vec::with_capacity(1 + branches.len());
-                keys.push(pack(closing.0, closing.1));
-                keys.extend(branches.iter().map(|&(i, j)| pack(i, j)));
-                keys
-            }
-            NearestNeighborLoop::Exterior { branches } => {
-                let mut keys = Vec::with_capacity(1 + branches.len());
-                keys.push(0 as P1KEY); // fake closing key
-                keys.extend(branches.iter().map(|&(i, j)| pack(i, j)));
-                keys
-            }
+            _ => false
         }
     }
 
     pub fn classify(
+        ends: Option<(NAIDX, NAIDX)>, 
         closing: Option<(NAIDX, NAIDX)>, 
         branches: Vec<(NAIDX, NAIDX)>, 
     ) -> Self {
         match closing {
-            None => Self::Exterior { branches },
+            None => match ends {
+                Some((i, j)) if i <= j => Self::Exterior { branches, ends: (i, j) },
+                Some((i, j)) if j < i => Self::JointExterior { branches, ends: (i, j) },
+                _ => panic!("Expected end annotation in exterior loop."),
+            },
             Some((i, j)) => match branches.len() {
                 0 => Self::Hairpin { closing: (i, j) },
                 1 => Self::Interior { closing: (i, j), inner: branches[0] },
@@ -129,71 +156,147 @@ impl NearestNeighborLoop {
         match self { Self::Hairpin { closing }
             | Self::Interior { closing, .. }
             | Self::Multibranch { closing, .. } => Some(*closing),
+            Self::JointExterior{ branches, .. } => 
+                Some(*branches.first().expect("JointExterior must have branches")),
             Self::Exterior { .. } => None,
+            Self::Disconnected { .. } => None,
         }
     }
 
-    fn unpaired_ranges(&self, len: usize) -> Vec<Range<usize>> {
+    /// Report the span of the loop -> first to last involved index.
+    pub fn span(&self) -> (NAIDX, NAIDX) {
+        match self { Self::Hairpin { closing }
+            | Self::Interior { closing, .. }
+            | Self::Multibranch { closing, .. } => *closing,
+            Self::JointExterior{ branches, .. } => *branches.first().expect("JointExterior must have branches"),
+            Self::Exterior { ends, .. } => *ends,
+            Self::Disconnected { .. } => panic!("Cannot determine span of disconnected loops."),
+        }
+    }
+
+    /// Returns a list of ranges for unpaired nucleotides.
+    pub fn inclusive_loop_ranges(&self) -> Vec<RangeInclusive<usize>> {
         match self {
-            Self::Hairpin { closing: (i, j) } => vec![
-                (*i as usize + 1)..(*j as usize)],
-            Self::Interior { closing: (i, j),  inner: (p, q) } => vec![
-                (*i as usize + 1)..(*p as usize), 
-                (*q as usize + 1)..(*j as usize)
-            ],
+            Self::Hairpin { closing: (i, j) } => 
+                vec![(*i as usize)..=(*j as usize)],
+            Self::Interior { closing: (i, j),  inner: (p, q) } => 
+                vec![(*i as usize)..=(*p as usize), 
+                     (*q as usize)..=(*j as usize)],
             Self::Multibranch { closing: (i, j), branches } => {
-                let mut result = vec![];
+                let mut result = Vec::with_capacity(branches.len() + 1);
                 let mut start = *i as usize;
                 for &(p, q) in branches {
-                    result.push((start + 1)..(p as usize));
+                    result.push((start)..=(p as usize));
                     start = q as usize;
                 }
-                result.push((start+1)..(*j as usize));
+                result.push((start)..=(*j as usize));
                 result
             }
-            Self::Exterior { branches } => {
-                let mut result = Vec::new();
-                let mut start = 0usize;
+            Self::Exterior { ends: (p5, p3), branches } => {
+                let mut result = Vec::with_capacity(branches.len() + 1);
+                let mut start = *p5 as usize;
                 for &(p, q) in branches {
-                    result.push(start..(p as usize));
-                    start = q as usize + 1;
+                    result.push(start..=(p as usize));
+                    start = q as usize;
                 }
-                result.push(start..len);
+                result.push(start..=(*p3 as usize));
                 result
             }
+            Self::JointExterior { ends: (p5, p3), branches } => {
+                debug_assert!(!branches.is_empty());
+                // TODO: more efficient?
+                let mut branches = branches.clone();
+                branches.rotate_left(1);
+                let last = branches.len() - 1;
+                let (i, j) = branches[last];
+                branches[last] = (j, i);
+                while let Some(&(i, _)) = branches.first() {
+                    if i > *p3 { break; }
+                    branches.rotate_left(1);
+                }
+                let mut result = Vec::with_capacity(branches.len() + 1);
+                let mut start = *p5 as usize;
+                for (p, q) in branches {
+                    result.push(start..=(p as usize));
+                    start = q as usize;
+                }
+                result.push(start..=(*p3 as usize));
+                result
+            }
+            Self::Disconnected { .. } => todo!("For now, get this explicitly for the disconnected components!"),
         }
-    }
-
-    pub fn unpaired_indices(&self, len: usize) -> Vec<usize> {
-        self.unpaired_ranges(len)
-            .into_iter()
-            .flat_map(|r| r.collect::<Vec<_>>())
-            .collect()
     }
 
     /// Returns all sequence indices that should point to this loop.
-    pub fn inclusive_unpaired_indices(&self, len: usize) -> Vec<usize> {
-        self.unpaired_ranges(len-1)
-            .into_iter()
-            .map(|r| r.start..=r.end)
-            .flat_map(|r| r.collect::<Vec<_>>())
-            .collect()
+    pub fn unpaired_indices(&self) -> Vec<usize> {
+        let spans = self.inclusive_loop_ranges();
+        match self {
+            Self::Exterior { .. } | Self::JointExterior { .. } => {
+                let n = spans.len() - 1;
+                spans.into_iter()
+                    .enumerate()
+                    .flat_map(|(k, r)| {
+                        let start = if k == 0 { *r.start() } else { *r.start() + 1 };
+                        let end = if k == n { *r.end() + 1 } else { *r.end() };
+                        start..end
+                    })
+                .collect()
+
+            },
+            _ => {
+                spans
+                    .into_iter()
+                    .flat_map(|r| {
+                        let start = *r.start() + 1;
+                        let end   = *r.end();
+                        start..end
+                    })
+                    .collect()
+            }
+        }
     }
-   
+
+    /// Returns all sequence indices that should point to this loop.
+    pub fn inclusive_unpaired_indices(&self) -> Vec<usize> {
+        let spans = self.inclusive_loop_ranges();
+        match self {
+            Self::Exterior { .. } | Self::JointExterior { .. } => {
+                spans.into_iter()
+                    .enumerate()
+                    .flat_map(|(k, r)| {
+                        let start = if k == 0 { *r.start() } else { *r.start() + 1 };
+                        start..=*r.end()
+                    })
+                .collect()
+
+            },
+            _ => {
+                spans
+                    .into_iter()
+                    .flat_map(|r| {
+                        let start = *r.start() + 1;
+                        let end   = *r.end();
+                        start..=end
+                    })
+                    .collect()
+            }
+        }
+    }
+
     /// Split the given loop into two new loops at the indices i,j
     /// NOTE: Returns (outer, inner)
     pub fn split_loop(&self, i: NAIDX, j: NAIDX) -> (Self, Self) {
-        assert!(i < j, "Split pair (i,j) must satisfy i < j");
+        debug_assert!(i < j, "Split pair (i,j) must satisfy i < j");
         match self {
             Self::Hairpin { closing: (a, b) } => {
-                assert!(*a < i && j < *b, "Pair (i,j) must be within hairpin loop");
+                debug_assert!(*a < i && j < *b, "Pair (i,j) must be within hairpin loop");
                 (Self::Interior { closing: (*a, *b), inner: (i, j), },
                  Self::Hairpin { closing: (i, j), })
             }
             
             Self::Interior { closing: (a, b), inner: (p, q) } => {
-                assert!(*a < i && j < *b, "Pair (i,j) outside of loop");
-                assert!(!(*p < i && j < *q), "Pair (i,j) outside of loop");
+                debug_assert!(*a < i && j < *b, "Pair (i,j) outside of loop");
+                debug_assert!(!(*p < i && j < *q), "Pair (i,j) outside of loop");
 
                 if i < *p && *q < j {
                     (Self::Interior { closing: (*a, *b), inner: (i, j) },
@@ -205,52 +308,77 @@ impl NearestNeighborLoop {
                     (Self::Multibranch { closing: (*a, *b), branches: vec![(*p, *q), (i, j)] },
                      Self::Hairpin { closing: (i, j) })
                 } else {
-                    panic!("that really should not happen.");
+                    panic!("Splitting Interior loop at {} {} {} {}. That really should not happen.", i, j, p, q);
                 }
             }
 
             Self::Multibranch { closing: (a, b), branches } => {
-                assert!(*a < i && j < *b, "Pair (i,j) outside loop");
+                debug_assert!(*a < i && j < *b, "Pair (i,j) outside loop");
+                let mut outer_branches = Vec::with_capacity(branches.len() + 1);
+                let mut inner_branches = Vec::with_capacity(branches.len());
+                outer_branches.push((i, j));
 
-                let mut outer_branches = vec![(i, j)];
-                let mut inner_branches = vec![];
-    
                 for &(p, q) in branches {
-                    assert!(p < q);
+                    debug_assert!(p < q);
                     if j < p || q < i {
                         outer_branches.push((p, q));
                     } else { 
-                        assert!(i < p && q < j);
+                        debug_assert!(i < p && q < j);
                         inner_branches.push((p, q));
                     } 
                 }
-
                 outer_branches.sort_unstable();
-                inner_branches.sort_unstable();
-                (Self::classify(Some((*a, *b)), outer_branches),
-                 Self::classify(Some((i, j)), inner_branches))
+                (Self::classify(None, Some((*a, *b)), outer_branches),
+                 Self::classify(None, Some((i, j)), inner_branches))
             }
 
-            Self::Exterior { branches } => {
-                let mut outer_branches = vec![];
-                let mut inner_branches = vec![];
-    
+            Self::Exterior { ends, branches } => {
+                let mut outer_branches = Vec::with_capacity(branches.len() + 1);
+                let mut inner_branches = Vec::with_capacity(branches.len());
                 outer_branches.push((i, j));
                 for &(p, q) in branches {
-                    assert!(p < q);
+                    debug_assert!(p < q);
                     if j < p || q < i {
                         outer_branches.push((p, q));
                     } else { 
-                        assert!(i < p && q < j);
+                        debug_assert!(i < p && q < j);
                         inner_branches.push((p, q));
                     } 
                 }
-
                 outer_branches.sort_unstable();
-                inner_branches.sort_unstable();
-                (Self::classify(None, outer_branches),
-                 Self::classify(Some((i, j)), inner_branches))
+                (Self::classify(Some(*ends), None, outer_branches),
+                 Self::classify(None, Some((i, j)), inner_branches))
             }
+
+            Self::JointExterior { ends: (p5, p3), branches } => {
+                let closing = branches.first().expect("JointExterior must have closing pair.");
+                let mut outer_branches = Vec::with_capacity(branches.len() + 1);
+                let mut inner_branches = Vec::with_capacity(branches.len());
+                outer_branches.push((i, j));
+                for &(p, q) in branches.iter().skip(1) {
+                    debug_assert!(p < q);
+                    if j < p || q < i {
+                        outer_branches.push((p, q));
+                    } else { 
+                        debug_assert!(i < p && q < j);
+                        inner_branches.push((p, q));
+                    } 
+                }
+                outer_branches.sort_unstable();
+                if i < *p5 && *p3 < j {
+                    inner_branches.insert(0, (i, j));
+                    (Self::classify(None, Some(*closing), outer_branches),
+                    Self::classify(Some((*p5, *p3)), None, inner_branches))
+                } else {
+                    debug_assert!(j < *p5 || *p3 < i);
+                    outer_branches.insert(0, *closing);
+                    (Self::classify(Some((*p5, *p3)), None, outer_branches),
+                    Self::classify(None, Some((i, j)), inner_branches))
+                }
+            }
+
+            // TODO: the idea is to only support bimolecular moves.
+            Self::Disconnected { .. } => todo!("not sure if we want to join complexes like this."),
         }
     }
 
@@ -258,14 +386,26 @@ impl NearestNeighborLoop {
     /// NOTE: the outer loop must be joined with the inner loop!
     pub fn join_loop(&self, other: &Self) -> Self {
         match (self, other) {
+            (Self::Disconnected { .. }, _) => { 
+                panic!("Cannot join disconnected loops!");
+            }
+
+            (_, Self::Disconnected { .. }) => { 
+                panic!("Cannot join disconnected loops!");
+            }
+
             (Self::Hairpin { .. }, _) => { 
                 panic!("A hairpin cannot be the outer loop!");
             }
 
             (_, Self::Exterior { .. }) => { 
-                panic!("Multi-stranded moves are not supported.");
+                panic!("The exterior loop cannot be the inner loop!");
             }
 
+            (Self::JointExterior{ .. }, _) => { 
+                panic!("The joint-exterior loop cannot be the outer loop!");
+            }
+ 
             (Self::Interior { closing: outer_closing, inner },
              Self::Hairpin { closing: inner_closing }) => {
                 assert_eq!(inner, inner_closing, "Cannot join interior & haipin loops!");
@@ -283,6 +423,16 @@ impl NearestNeighborLoop {
                 assert_eq!(inner, inner_closing, "Cannot join interior & multibranch loops!");
                 Self::Multibranch { closing: *outer_closing, branches: branches.clone() }
             },
+ 
+            (Self::Interior { closing: outer_closing, inner },
+             Self::JointExterior { ends, branches }) => {
+                assert_eq!(inner, branches.first().unwrap(), 
+                    "Cannot join Interior & JointExterior loops!");
+                let mut new_branches = Vec::with_capacity(branches.len());
+                new_branches.push(*outer_closing);
+                new_branches.extend_from_slice(&branches[1..]);
+                Self::JointExterior { ends: *ends, branches: new_branches }
+            },
 
             (Self::Multibranch { closing: outer_closing, branches },
              Self::Hairpin { closing: inner_closing }
@@ -291,7 +441,7 @@ impl NearestNeighborLoop {
                     .filter(|b| b != inner_closing)
                     .collect();
                 assert_eq!(branches.len(), new_branches.len() + 1, "Cannot join multibranch & hairpin loops!");
-                Self::classify(Some(*outer_closing), new_branches)
+                Self::classify(None, Some(*outer_closing), new_branches)
             }
   
             (Self::Multibranch { closing: outer_closing, branches },
@@ -306,38 +456,307 @@ impl NearestNeighborLoop {
             (Self::Multibranch { closing: outer_closing, branches: outer_branches },
              Self::Multibranch { closing: inner_closing, branches: inner_branches }
             ) => {
-                let new_branches: Vec<_>  = outer_branches.iter().cloned()
-                    .flat_map(|x| if x == *inner_closing { inner_branches.clone()  } else { vec![x] })
-                    .collect();
+                let mut new_branches = Vec::with_capacity(
+                    outer_branches.len() + inner_branches.len() - 1
+                );
+                for &x in outer_branches {
+                    if x == *inner_closing {
+                        new_branches.extend_from_slice(inner_branches);
+                    } else {
+                        new_branches.push(x);
+                    }
+                }
                 Self::Multibranch { closing: *outer_closing, branches: new_branches }
             },
-            
-            (Self::Exterior { branches },
+
+            (Self::Multibranch { closing: outer_closing, branches: outer_branches },
+             Self::JointExterior { ends, branches: inner_branches }
+            ) => {
+                let inner_closing = inner_branches.first().unwrap();
+                let mut new_branches = Vec::with_capacity(
+                    outer_branches.len() + inner_branches.len()
+                );
+                new_branches.push(*outer_closing);
+                for &x in outer_branches {
+                    if x == *inner_closing {
+                        new_branches.extend_from_slice(&inner_branches[1..]);
+                    } else {
+                        new_branches.push(x);
+                    }
+                }
+                Self::JointExterior { ends: *ends, branches: new_branches }
+            },
+
+            (Self::Exterior { ends, branches },
              Self::Hairpin { closing: inner_closing }
             ) => {
                 let new_branches: Vec<_>  = branches.iter().cloned()
                     .filter(|b| b != inner_closing)
                     .collect();
-                Self::Exterior { branches: new_branches }
+                Self::Exterior { ends: *ends, branches: new_branches }
             }
 
-            (Self::Exterior { branches },
+            (Self::Exterior { ends, branches },
              Self::Interior { closing: inner_closing, inner }
             ) => {
                 let new_branches: Vec<_>  = branches.iter().cloned()
                     .map(|x| if x == *inner_closing { *inner } else { x })
                     .collect();
-                Self::Exterior { branches: new_branches }
+                Self::Exterior { ends: *ends, branches: new_branches }
             },
               
-            (Self::Exterior { branches: outer_branches },
+            (Self::Exterior { ends, branches: outer_branches },
              Self::Multibranch { closing: inner_closing, branches: inner_branches }
             ) => {
-                let new_branches: Vec<_>  = outer_branches.iter().cloned()
-                    .flat_map(|x| if x == *inner_closing { inner_branches.clone()  } else { vec![x] })
-                    .collect();
-                Self::Exterior { branches: new_branches }
+                let mut new_branches =
+                    Vec::with_capacity(outer_branches.len() + inner_branches.len() - 1);
+
+                for &x in outer_branches {
+                    if x == *inner_closing {
+                        new_branches.extend_from_slice(inner_branches);
+                    } else {
+                        new_branches.push(x);
+                    }
+                }
+                Self::Exterior { ends: *ends, branches: new_branches }
             },
+
+            (Self::Exterior { ends: (lp5, rp3), branches: outer_branches },
+             Self::JointExterior { ends: (rp5, lp3), branches: inner_branches }
+            ) => {
+                let inner_closing = inner_branches.first().unwrap();
+                let mut all_branches = Vec::with_capacity(
+                    outer_branches.len() + inner_branches.len().saturating_sub(1)
+                );
+
+                for &x in outer_branches {
+                    if x == *inner_closing {
+                        all_branches.extend_from_slice(&inner_branches[1..]);
+                    } else {
+                        all_branches.push(x);
+                    }
+                }
+                let (left, right): (Vec<_>, Vec<_>) = all_branches
+                    .into_iter()
+                    .partition(|&(_i, j)| j < *rp5);
+ 
+                let l = Self::Exterior { ends: (*lp5, *lp3), branches: left };
+                let r = Self::Exterior { ends: (*rp5, *rp3), branches: right };
+                Self::Disconnected { left: Box::new(l), right: Box::new(r)}
+            },
+
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    macro_rules! assert_closing {
+        ($loop:expr, $pair:expr) => {
+            assert_eq!($loop.closing(), Some($pair));
+        };
+    }
+
+    macro_rules! assert_kind {
+        ($loop:expr, $pat:pat) => {
+            assert!(matches!($loop, $pat), "unexpected loop: {:?}", $loop);
+        };
+    }
+
+
+    #[test]
+    fn split_hairpin() {
+        let lp = NearestNeighborLoop::Hairpin { closing: (2, 10) };
+
+        let (outer, inner) = lp.split_loop(4, 8);
+
+        assert_kind!(outer, NearestNeighborLoop::Interior { .. });
+        assert_kind!(inner, NearestNeighborLoop::Hairpin { .. });
+
+        assert_closing!(outer, (2, 10));
+        assert_closing!(inner, (4, 8));
+    }
+
+    #[test]
+    fn split_interior_wrapping() {
+        let lp = NearestNeighborLoop::Interior {
+            closing: (1, 20),
+            inner: (8, 12),
+        };
+
+        let (outer, inner) = lp.split_loop(5, 15);
+
+        assert_kind!(outer, NearestNeighborLoop::Interior { .. });
+        assert_kind!(inner, NearestNeighborLoop::Interior { .. });
+
+        assert_closing!(outer, (1, 20));
+        assert_closing!(inner, (5, 15));
+    }
+
+    #[test]
+    fn split_interior_left_multibranch() {
+        let lp = NearestNeighborLoop::Interior {
+            closing: (1, 20),
+            inner: (10, 15),
+        };
+
+        let (outer, inner) = lp.split_loop(4, 6);
+
+        assert_kind!(outer, NearestNeighborLoop::Multibranch { .. });
+        assert_kind!(inner, NearestNeighborLoop::Hairpin { .. });
+
+        assert_closing!(inner, (4, 6));
+    }
+
+    #[test]
+    fn split_multibranch() {
+        let lp = NearestNeighborLoop::Multibranch {
+            closing: (1, 30),
+            branches: vec![(5, 8), (12, 15), (20, 25)],
+        };
+
+        let (outer, inner) = lp.split_loop(10, 18);
+
+        assert_kind!(outer, NearestNeighborLoop::Multibranch { .. });
+        assert_kind!(inner, NearestNeighborLoop::Interior { .. });
+
+        assert_closing!(outer, (1, 30));
+        assert_closing!(inner, (10, 18));
+    }
+
+    #[test]
+    fn split_exterior() {
+        let lp = NearestNeighborLoop::Exterior {
+            ends: (0, 30),
+            branches: vec![(5, 8), (12, 15), (20, 25)],
+        };
+
+        let (outer, inner) = lp.split_loop(9, 10);
+
+        assert_kind!(outer, NearestNeighborLoop::Exterior { .. });
+        assert_kind!(inner, NearestNeighborLoop::Hairpin { .. });
+
+        assert_closing!(inner, (9, 10));
+    }
+
+    #[test]
+    fn split_joint_exterior_outer() {
+        let lp = NearestNeighborLoop::JointExterior {
+            ends: (20, 18),
+            branches: vec![(1, 28), (5, 8), (12, 15)],
+        };
+
+        let (outer, inner) = lp.split_loop(4, 10);
+
+        assert_kind!(outer, NearestNeighborLoop::JointExterior { .. });
+        assert_kind!(inner, NearestNeighborLoop::Interior { .. });
+
+        assert_closing!(outer, (1, 28));
+        assert_closing!(inner, (4, 10));
+
+        let (outer, inner) = lp.split_loop(4, 25);
+
+        assert_kind!(outer, NearestNeighborLoop::Interior { .. });
+        assert_kind!(inner, NearestNeighborLoop::JointExterior { .. });
+
+        assert_closing!(outer, (1, 28));
+        assert_closing!(inner, (4, 25));
+
+    }
+
+    #[test]
+    fn join_interior_hairpin() {
+        let inner = NearestNeighborLoop::Hairpin {
+            closing: (3, 7),
+        };
+        let outer = NearestNeighborLoop::Interior {
+            inner: (3, 7),
+            closing: (0, 10),
+        };
+        let joined = outer.join_loop(&inner);
+        assert_eq!(
+            joined,
+            NearestNeighborLoop::Hairpin { closing: (0, 10) }
+        );
+    }
+
+    #[test]
+    fn join_interior_interior() {
+        let inner = NearestNeighborLoop::Interior {
+            closing: (5, 15),
+            inner: (8, 12),
+        };
+        let outer = NearestNeighborLoop::Interior {
+            closing: (0, 20),
+            inner: (5, 15),
+        };
+        let joined = outer.join_loop(&inner);
+
+        assert_eq!(
+            joined,
+            NearestNeighborLoop::Interior {
+                closing: (0, 20),
+                inner: (8, 12),
+            }
+        );
+    }
+
+    #[test]
+    fn join_interior_multibranch() {
+        let outer = NearestNeighborLoop::Interior {
+            closing: (0, 20),
+            inner: (5, 15),
+        };
+        let inner = NearestNeighborLoop::Multibranch {
+            closing: (5, 15),
+            branches: vec![(7, 9), (11, 13)],
+        };
+        let joined = outer.join_loop(&inner);
+        assert_eq!(
+            joined,
+            NearestNeighborLoop::Multibranch {
+                closing: (0, 20),
+                branches: vec![(7, 9), (11, 13)],
+            }
+        );
+    }
+
+    #[test]
+    fn join_exterior_jointexterior_disconnects() {
+        let outer = NearestNeighborLoop::Exterior {
+            ends: (0, 25),
+            branches: vec![(5, 20)],
+        };
+
+        let inner = NearestNeighborLoop::JointExterior {
+            ends: (12, 10),
+            branches: vec![(5, 20), (6, 10), (15, 19)],
+        };
+
+        let joined = outer.join_loop(&inner);
+
+        match joined {
+            NearestNeighborLoop::Disconnected { left, right } => {
+                assert_eq!(
+                    *left,
+                    NearestNeighborLoop::Exterior {
+                        ends: (0, 10),
+                        branches: vec![(6, 10)],
+                    }
+                );
+                assert_eq!(
+                    *right,
+                    NearestNeighborLoop::Exterior {
+                        ends: (12, 25),
+                        branches: vec![(15, 19)],
+                    }
+                );
+            }
+            other => panic!("expected Disconnected, got {:?}", other),
+        }
+    }
+
+}
+
