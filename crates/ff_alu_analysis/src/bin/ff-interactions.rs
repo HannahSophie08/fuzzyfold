@@ -16,11 +16,6 @@ use anyhow::Result;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
 use rustc_hash::FxHashMap;
-use plotters::prelude::*;
-use plotters::style::Palette;
-use plotters::style::IntoFont;
-use plotters::prelude::IntoLogRange;
-use plotters::style::Color;
 
 use ff_structure::PairTable;
 use ff_energy::EnergyModel;
@@ -29,7 +24,6 @@ use ff_kinetics::Walker;
 use ff_kinetics::LoopNeighbors;
 use ff_kinetics::shift_policy::*;
 use ff_kinetics::SSA;
-
 
 use ff_alu_analysis::input_parsers::read_cotr_input;
 use ff_alu_analysis::energy_parsers::EnergyModelArguments;
@@ -64,7 +58,6 @@ pub struct Cli {
 }
 
 
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
     cli.simulation.validate()?;
@@ -84,19 +77,17 @@ fn main() -> Result<()> {
     })
     .collect();
 
-    let svg_path = cli.output.with_extension("svg");
     let csv_path = cli.output.with_extension("csv");
 
     // --- Check input ---
-    if structure.len() < sequence.len() && cli.simulation.t_ext.is_none() {
+    if cli.simulation.t_ext.is_none() {
         panic!("Error:'t-ext' (extension time) missing for cotranscriptional simulation!"); 
     }
 
-    if structure.len() == sequence.len() && cli.simulation.t_ext.is_some() {
-        panic!("Error: 't-ext' (extension time) given in combination full length structure. For cotranscriptional simulation give either 
+    if structure.len() == sequence.len() {
+        panic!("Error: Full length structure given, for cotranscriptional simulation give either 
         shorter start structure or no structure!");
     }
-
 
     if let Some(h) = header {
         println!("{}", h.yellow());
@@ -144,18 +135,124 @@ fn main() -> Result<()> {
     let co_time = cli.simulation.t_ext.unwrap() * (sequence.len() - structure.len()) as f64;
     let post_time = co_time + cli.simulation.t_end;
 
-   
-
     println!("{}", "Finished simulations!".red());
 
-    let mut writer = BufWriter::new(File::create(csv_path.clone())?);
-    writeln!(writer, "# t_split={}", co_time)?;
-    writeln!(writer, "# t_end={}", post_time)?;
-    write_categories(&mut writer, &times, &categories)?;
-   
-    
+    let mut existing_num_sims: usize = 0; 
+    let mut existing_counts: FxHashMap<(usize, Category), usize> = FxHashMap::default();
+
+    let accumulate = if Path::new(&csv_path).exists() {
         
-    println!("Plotted svg file: {}", svg_path.display());
+        let exisiting_content = fs::read_to_string(&csv_path)?;
+        let mut matches = true; 
+
+        for line in exisiting_content.lines() {
+            if let Some(rest) = line.strip_prefix("# t_ext=") {
+                let existing_t_ext: f64 = rest.parse()?; 
+                if existing_t_ext != cli.simulation.t_ext.unwrap() {
+                    println!("Error: t-ext of existing file doesn't match! Simualtions can not be accumulated");
+                    matches = false; 
+                    break 
+                }         
+            }
+            if let Some(rest) = line.strip_prefix("# t_end=") {
+                let existing_t_end: f64 = rest.parse()?;
+                if existing_t_end != post_time {
+                    println!("Error: t-end of existing file doesn't match! Simulations can not be accumulated");
+                    matches = false; 
+                    break
+                }
+            }   
+            if let Some(rest) = line.strip_prefix("# t_split=") {
+                let existing_t_split: f64 = rest.parse()?;
+                if existing_t_split != co_time {
+                    println!("Error: t-end of existing file doesn't match! Simulations can not be accumulated");
+                    matches = false; 
+                    break
+                } 
+            }
+            if let Some(rest) = line.strip_prefix("# regions=") {
+                let mut existing_regions: Vec<(usize, usize)> = Vec::new();
+                for piece in rest.split(',') {
+                    let (a, b) = piece.split_once('-').expect("region must be in format START-END");
+                    let a: usize = a.parse()?;
+                    let b: usize = b.parse()?;
+                    existing_regions.push((a, b));
+                }
+                if existing_regions != regions {
+                    println!("Error: regions of existing file don't match! Simulations can not be accumulated");
+                    matches = false; 
+                    break
+                } 
+            }
+
+            if let Some(rest) = line.strip_prefix("# num_sims=") {
+                existing_num_sims = rest.parse()?; 
+            }  
+        }
+
+        if matches {
+
+            let mut existing_times: Vec<f64> = Vec::new();
+        
+            for line in exisiting_content.lines() {
+                if line.starts_with('#') {
+                    continue;
+                }
+
+                if line == "time,category,count" {
+                    continue;
+                }
+        
+                let cols: Vec<&str> = line.split(',').collect();
+                let t:f64 = cols[0].parse()?;
+
+                if existing_times.last() != Some(&t) {
+                    existing_times.push(t);
+                }
+
+                let category = Category::from_key(cols[1])?;
+                let count: usize = cols[2].parse()?;
+
+                let t_idx = times.iter().position(|x| *x == t). expect("time in existing file should be one of the known timepoints");
+
+                existing_counts.insert((t_idx, category), count);
+            }
+
+            if existing_times != times {
+                    println!("Error: times of existing file don't match! Simulations can not be accumulated");
+                    matches = false;
+            }
+        }
+
+        matches 
+    } else {
+        false 
+    };
+
+    if !accumulate {
+        existing_counts.clear();
+        existing_num_sims = 0;
+    }
+
+    for (t_idx, map) in categories.iter().enumerate() {
+            for (cat, count) in map {
+                *existing_counts.entry((t_idx, cat.clone())).or_insert(0) += count;
+            }
+    }
+
+    let total_num_sims = existing_num_sims + cli.num_sims;
+   
+    let mut writer = BufWriter::new(File::create(csv_path.clone())?);
+        writeln!(writer, "# t_split={}", co_time)?;
+        writeln!(writer, "# t_ext={:?}", cli.simulation.t_ext.unwrap())?;
+        writeln!(writer, "# t_end={}", post_time)?;
+        let regions_str = regions.iter()
+            .map(|(a, b)| format!("{}-{}", a, b))
+            .collect::<Vec<_>>()
+            .join(",");
+        writeln!(writer, "# regions={}", regions_str)?;
+        writeln!(writer, "# num_sims={}", total_num_sims)?;
+        write_categories(&mut writer, &times, &existing_counts)?;
 
 
     Ok(())
@@ -228,15 +325,13 @@ fn sort_by_timepoint(times: &Vec<f64>, structures: &Vec<Vec<DotBracketVec>>, num
     sorted
 }
 
-fn count_categories(structures: &[Vec<DotBracketVec>], regions: &Vec<(usize, usize)>,) -> Result<Vec<FxHashMap<Category, f64>>>{
+fn count_categories(structures: &[Vec<DotBracketVec>], regions: &Vec<(usize, usize)>,) -> Result<Vec<FxHashMap<Category, usize>>>{
 
     let mut result = Vec::with_capacity(structures.len());
    
     for timepoint_structures in structures.iter() {
 
         let mut counts: FxHashMap<Category, usize> = FxHashMap::default();
-        let mut total_pairs = 0; // total pairs in region 
-
 
         for structure in timepoint_structures.iter() {
 
@@ -255,16 +350,12 @@ fn count_categories(structures: &[Vec<DotBracketVec>], regions: &Vec<(usize, usi
                 };
 
                 *counts.entry(category).or_insert(0) += 1;
-                total_pairs += 1;
             
             }
         }
 
-        let percentages = counts.into_iter()
-            .map(|(cat, count)| (cat, count as f64 / total_pairs as f64 * 100.0))
-            .collect();
+        result.push(counts); 
 
-        result.push(percentages); 
     }
     Ok(result)
 }
@@ -273,12 +364,14 @@ fn count_categories(structures: &[Vec<DotBracketVec>], regions: &Vec<(usize, usi
 fn write_categories( 
     writer: &mut impl Write,
     times: & [f64],
-    categories: &[FxHashMap<Category, f64>],
+    counts: &FxHashMap<(usize, Category), usize>,
 ) -> Result<()> {
-    writeln!(writer, "time,category,value")?;
-    for (t, map) in times.iter().zip(categories.iter()) {
-        for (cat, val) in map {
-            writeln!(writer, "{},{},{}", t, cat.to_key(), val)?;
+    writeln!(writer, "time,category,count")?;
+    for (t_idx, t) in times.iter().enumerate() {
+        for ((entry_t_idx, cat), count) in counts.iter() {
+            if entry_t_idx == &t_idx {
+                writeln!(writer, "{},{},{}", t, cat.to_key(), count)?;
+            }
         }
     }
     Ok(())
