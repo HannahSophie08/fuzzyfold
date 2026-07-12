@@ -102,12 +102,15 @@ fn main() -> Result<()> {
     };
                                                                             //
     let mut macrostates = MacrostateRegistry::from((sequence.clone(), emodel.clone()));
-    macrostates.insert_files(&cli.macrostates)?;
+    macrostates.insert_files(&cli.macrostates, cli.simulation.t_ext.is_some())?;
     // Verbose Output
     println!("{:>4} {:<10} {} {:>5} {:>8}",
         "ID",
         "Macrostate".cyan(), format!("{}", sequence).yellow(), "Size", "Energy");
-    for (id, m) in macrostates.iter() {
+    for (id, (l, m)) in macrostates.iter() {
+        if *l != sequence.len() {
+            continue
+        }
         if m.name() == "Unassigned" {
             println!("{:4} {:<10}", 0, m.name());
             continue
@@ -115,7 +118,7 @@ fn main() -> Result<()> {
         println!("{:4} {:<10} {:<} {:>5} {:>8.2}",
             id, 
             m.name(),
-            m.get_lowest_microstate(sequence.len()).unwrap(),
+            m.get_lowest_microstate().unwrap(),
             m.len(),
             m.ensemble_energy().unwrap());
     }

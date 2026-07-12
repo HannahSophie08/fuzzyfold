@@ -117,7 +117,7 @@ fn load_dbv_registries(
         "Macrostate block count must match input trajectory count");
     blocks.iter().zip(inputs.iter()).map(|(block, (seq, _))| {
         let mut registry = MacrostateRegistry::from((seq.clone(), emodel.clone()));
-        registry.insert_from_reader(Cursor::new(block.as_bytes()), macrostates_path)
+        registry.insert_from_reader(Cursor::new(block.as_bytes()), macrostates_path, 0)
             .expect("Failed to parse macrostate block");
         registry
     }).collect()

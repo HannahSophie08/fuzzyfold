@@ -63,26 +63,24 @@ use crate::{K0, KB};
 #[derive(Debug)]
 pub struct Macrostate {
     name: String,
-    min_length: usize,
-    max_length: usize,
     ensemble: FxHashMap<DotBracketVec, (i32, f64)>,
     ensemble_energy: Option<f64>,
 }
 
-fn truncate(dbv: &DotBracketVec) -> DotBracketVec {
-    //TODO benchmark
+fn truncate(dbv: DotBracketVec, num: usize) -> Option<DotBracketVec> {
     let mut truncated = dbv.to_vec();
-    while truncated.last() == Some(&DotBracket::Unpaired) {
+    let mut removed = 0;
+    while removed < num && truncated.last() == Some(&DotBracket::Unpaired) {
         truncated.pop();
+        removed += 1;
     }
-    assert!(truncated.is_empty() || 
-        matches!(truncated.last(), Some(&DotBracket::Close)),
-        "Truncated structure must end with ')'"
-    );
-    DotBracketVec(truncated)
+    if removed == num {
+        return Some(DotBracketVec(truncated))
+    };
+    None
 }
 
-fn pad(dbv: &DotBracketVec, len: usize) -> DotBracketVec {
+pub fn pad(dbv: &DotBracketVec, len: usize) -> DotBracketVec {
     let mut padded = dbv.to_vec();
     let extra = len.saturating_sub(padded.len());
     padded.extend(std::iter::repeat_n(DotBracket::Unpaired, extra));
@@ -96,8 +94,6 @@ impl Macrostate {
     pub fn new_catch_all(name: &str) -> Self {
         Macrostate { 
             name: name.to_owned(),
-            min_length: 0,
-            max_length: 0,
             ensemble: FxHashMap::default(),
             ensemble_energy: None,
         }
@@ -113,19 +109,13 @@ impl Macrostate {
         let rt = KB * (K0 + energy_model.temperature());
 
         let mut q_sum = 0.0;
-        let mut min_length = usize::MAX;
-        let mut max_length = 0usize;
         for dbv in structures {
             let pt = PairTable::try_from(dbv)
                 .expect("Invalid dot-bracket for energy evaluation");
             let en = energy_model.energy_of_structure(sequence, &pt)
                 .expect("Broken energy evaluation!");
             let q = (-en as f64 / 100.0 / rt).exp();
-            let tdbv = truncate(dbv);
-            let len = tdbv.len();
-            min_length = min_length.min(len);
-            max_length = max_length.max(len);
-            ensemble.insert(tdbv, (en, q));
+            ensemble.insert(dbv.clone(), (en, q));
             q_sum += q;
         }
         // Turn partition function contributions into probabilities.
@@ -134,8 +124,6 @@ impl Macrostate {
         }
         Self {
             name: name.to_owned(),
-            min_length,
-            max_length,
             ensemble,
             ensemble_energy: Some(-rt * q_sum.ln()),
         }
@@ -165,21 +153,16 @@ impl Macrostate {
     /// Check if a secondary structure is contained in this macrostate.
     pub fn contains(&self, structure: &DotBracketVec) -> bool {
         // May speed up co-transcriptional scenarios.
-        if structure.len() < self.min_length {
-            return false
-        }
-        let tdbv = truncate(structure);
-        let len = tdbv.len();
-        self.min_length <= len && len <= self.max_length && self.ensemble.contains_key(&tdbv)
+        self.ensemble.contains_key(structure)
     }
 
-    pub fn get_lowest_microstate(&self, len: usize) -> Option<DotBracketVec> {
+    pub fn get_lowest_microstate(&self) -> Option<&DotBracketVec> {
         self.ensemble
             .iter()
             .min_by(|(_, (e_a, _)), (_, (e_b, _))| {
                 e_a.partial_cmp(e_b).unwrap_or(std::cmp::Ordering::Equal)
             })
-            .map(|(dbv, _)| pad(dbv, len))
+            .map(|(dbv, _)| dbv)
     }
 
     /// Randomly pick a structure according to its probability in the ensemble.
@@ -211,12 +194,12 @@ pub struct MacrostateRegistry<E: EnergyModel> {
     sequence: NucleotideVec,
     energy_model: Arc<E>,
     /// By convention: macrostates[0] = unassigned.
-    macrostates: Vec<Macrostate>,
+    macrostates: Vec<(usize, Macrostate)>,
 }
 
 impl<E: EnergyModel> From<(NucleotideVec, Arc<E>)> for MacrostateRegistry<E> {
     fn from((sequence, energy_model): (NucleotideVec, Arc<E>)) -> Self {
-        let macrostates = vec![Macrostate::new_catch_all("Unassigned")];
+        let macrostates = vec![(sequence.len(), Macrostate::new_catch_all("Unassigned"))];
 
         MacrostateRegistry {
             sequence,
@@ -233,17 +216,29 @@ fn io_err(msg: &str, src: &str) -> io::Error {
 impl<E: EnergyModel> MacrostateRegistry<E> {
 
     /// High-level entry: read one or more macrostate files from disk.
-    pub fn insert_files(&mut self, files: &[PathBuf]) -> io::Result<()> {
+    pub fn insert_files(&mut self, files: &[PathBuf], cotrans: bool) -> io::Result<()> {
         for file in files {
-            let fh = File::open(file)?;
-            let reader = BufReader::new(fh);
-            self.insert_from_reader(reader, &file.display().to_string())?;
+            let mut num_to_remove = 0;
+            loop {
+                let fh = File::open(file)?;
+                let reader = BufReader::new(fh);
+                match self.insert_from_reader(reader, &file.display().to_string(), num_to_remove)? {
+                    true => num_to_remove += 1,
+                    false => break,
+                }
+                if !cotrans {
+                    break
+                }
+            }
         }
         Ok(())
     }
 
-    pub fn insert_from_reader<R: BufRead>(&mut self, reader: R, source: &str
-    ) -> io::Result<()> {
+    pub fn insert_from_reader<R: BufRead>(&mut self, 
+        reader: R, 
+        source: &str, 
+        remove: usize,
+    ) -> io::Result<bool> {
 
         let mut lines = reader.lines();
 
@@ -296,7 +291,11 @@ impl<E: EnergyModel> MacrostateRegistry<E> {
             };
 
             match DotBracketVec::try_from(structure_str) {
-                Ok(dbv) => structures.push(dbv),
+                Ok(dbv) => { 
+                    if let Some(dbv) = truncate(dbv, remove) {
+                        structures.push(dbv)
+                    };
+                }
                 Err(e) => {
                     return Err(io_err(
                         &format!("Invalid secondary structure at line {}: {:?}", lineno + 3, e),
@@ -306,17 +305,20 @@ impl<E: EnergyModel> MacrostateRegistry<E> {
             }
         }
 
-        if structures.is_empty() {
+        if structures.is_empty() && remove == 0 {
             return Err(io_err("No structures found", source));
+        } else if structures.is_empty() {
+            return Ok(false)
         }
 
-        self.macrostates.push(Macrostate::from_list(
-            &name,
-            &self.sequence,
-            &structures,
-            &*self.energy_model,
-        ));
-        Ok(())
+        self.macrostates.push((file_seq.len() - remove, 
+                Macrostate::from_list(
+                    &name,
+                    &self.sequence,
+                    &structures,
+                    &*self.energy_model,
+                )));
+        Ok(true)
     }
 
     /// Try to classify a structure:
@@ -326,8 +328,8 @@ impl<E: EnergyModel> MacrostateRegistry<E> {
     pub fn classify(&self, structure: &DotBracketVec) -> usize {
         let mut matches = Vec::new();
 
-        for (i, ms) in self.macrostates.iter().enumerate() {
-            if ms.contains(structure) {
+        for (i, (len, ms)) in self.macrostates.iter().enumerate() {
+            if structure.len() == *len && ms.contains(structure) {
                 matches.push(i);
             }
         }
@@ -346,7 +348,12 @@ impl<E: EnergyModel> MacrostateRegistry<E> {
         &self.sequence
     }
 
-    pub fn macrostates(&self) -> &Vec<Macrostate> {
+    pub fn energy_model(&self) -> &Arc<E> {
+        &self.energy_model
+    }
+
+
+    pub fn macrostates(&self) -> &Vec<(usize, Macrostate)> {
         &self.macrostates
     }
 
@@ -361,7 +368,7 @@ impl<E: EnergyModel> MacrostateRegistry<E> {
     }
 
     /// Iterate over all macrostates
-    pub fn iter(&self) -> impl Iterator<Item = (usize, &Macrostate)> {
+    pub fn iter(&self) -> impl Iterator<Item = (usize, &(usize, Macrostate))> {
         self.macrostates.iter().enumerate()
     }
 }
@@ -427,7 +434,7 @@ mod tests {
 
         // By convention: one unassigned macrostate
         assert_eq!(registry.len(), 1);
-        assert_eq!(registry.macrostates()[0].name(), "Unassigned");
+        assert_eq!(registry.macrostates()[0].1.name(), "Unassigned");
 
         let input = b">test
         UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC
@@ -435,7 +442,7 @@ mod tests {
         .((((....)))).((((.(....).))))...............
         .((((....))))..(((........)))................
         ";
-        registry.insert_from_reader(Cursor::new(input), "manual").unwrap();
+        registry.insert_from_reader(Cursor::new(input), "manual", 0).unwrap();
         assert_eq!(registry.len(), 2);
 
         // Build a test macrostate with a few structures
@@ -451,7 +458,7 @@ mod tests {
         assert_eq!(registry.classify(&s4), 0);
 
         // Iteration test
-        let all_names: Vec<_> = registry.iter().map(|(_, ms)| ms.name().to_string()).collect();
+        let all_names: Vec<_> = registry.iter().map(|(_, (_, ms))| ms.name().to_string()).collect();
         assert!(all_names.contains(&"Unassigned".to_string()));
         assert!(all_names.contains(&"test".to_string()));
     }

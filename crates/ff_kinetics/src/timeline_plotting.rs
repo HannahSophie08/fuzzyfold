@@ -1,8 +1,9 @@
-use ff_energy::EnergyModel;
 use std::path::Path;
+use rustc_hash::FxHashMap;
 use plotters::prelude::*;
 use plotters::style::Palette99;
 
+use ff_energy::EnergyModel;
 use crate::timeline::Timeline;
 
 pub fn plot_occupancy_over_time<E: EnergyModel>(
@@ -87,13 +88,41 @@ pub fn plot_occupancy_over_time<E: EnergyModel>(
     ))).unwrap();
 
 
-    // Build data per structure
-    let mut trajectories: Vec<(usize, Vec<(f64, f64, f64)>)> = Vec::new();
+    // Group indices by macrostate name, preserving first-seen order.
+    let macrostates = timeline.registry.macrostates();
+    let mut name_order: Vec<&str> = Vec::new();
+    let mut name_to_indices: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
+    for (idx, (_len, ms)) in macrostates.iter().enumerate() {
+        let name = ms.name();
+        name_to_indices
+            .entry(name)
+            .or_insert_with(|| {
+                name_order.push(name);
+                Vec::new()
+            })
+        .push(idx);
+        }
 
-    for (id, _) in timeline.registry.iter() {
+    // Build data per macrostate name
+    let mut trajectories: Vec<(&str, Vec<(f64, f64, f64)>)> = Vec::new();
+    for name in &name_order {
+        let indices = &name_to_indices[name];
         let mut series = Vec::new();
         for tp in &timeline.points {
-            let count = tp.ensemble.get(&id).copied().unwrap_or(0);
+            // Same invariant as the Display impl: at most one length-variant
+            // should carry nonzero count at any given timepoint, for now.
+            let nonzero_variants = indices.iter()
+                .filter(|&&i| tp.ensemble.get(&i).copied().unwrap_or(0) > 0)
+                .count();
+            debug_assert!(
+                nonzero_variants <= 1,
+                "macrostate '{}' has nonzero count at {} length-variants \
+                simultaneously (indices {:?}) at t={}",
+                name, nonzero_variants, indices, tp.time
+            );
+            let count: usize = indices.iter()
+                .map(|&i| tp.ensemble.get(&i).copied().unwrap_or(0))
+                .sum();
             let occu = if tp.counter > 0 {
                 count as f64 / tp.counter as f64
             } else { 0.0 };
@@ -102,20 +131,17 @@ pub fn plot_occupancy_over_time<E: EnergyModel>(
             } else { 0.0 };
             series.push((tp.time, occu, se));
         }
-        if id == 0 || series.iter().any(|(_, occu, _)| *occu >= 0.02) { // threshold filter
-            trajectories.push((id, series));
+        if *name == macrostates[0].1.name() || series.iter().any(|(_, occu, _)| *occu >= 0.02) {
+            trajectories.push((name, series));
         }
     }
 
     // Sort by ID to have consistent colors
-    trajectories.sort_by_key(|(id, _)| *id);
+    //trajectories.sort_by_key(|(id, _)| *id);
 
     // Find global Y max for normalization
-    for (i, (id, series)) in trajectories.iter().enumerate() {
+    for (i, (name, series)) in trajectories.iter().enumerate() {
         let color = Palette99::pick(i).mix(0.9); // pick a distinct color
-
-        let name = timeline.registry.macrostates()[*id].name();
-        let energy = timeline.registry.macrostates()[*id].ensemble_energy().unwrap_or(0.0);
 
         let z = 1.0; // or 1.96 for 95%
         let band_color = color.mix(0.2);
@@ -148,7 +174,7 @@ pub fn plot_occupancy_over_time<E: EnergyModel>(
             series.iter().cloned().map(|(t, p, _)| (t, p)).filter(|(t, _)| *t >= t_lin - eps),
             color.stroke_width(2),
         )).unwrap()
-            .label(format!("{:20} {:>6.2}", name.trim(), energy))   // <-- label for legend
+            .label(name.to_string())   // <-- label for legend
             .legend(move |(x, y)| {
                 PathElement::new(vec![(x, y), (x + 20, y)], color.stroke_width(2))
             });
