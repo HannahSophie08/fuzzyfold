@@ -6,7 +6,9 @@ use crate::parameters::dna_mathews_2004::mathews2004_int21::*;
 use crate::parameters::dna_mathews_2004::mathews2004_int22::*;
 use crate::parameters::dna_mathews_2004::mathews2004_loops::*;
 use crate::parameters::dna_mathews_2004::mathews2004_dangles::*;
+use crate::parameters::dna_mathews_2004::mathews2004_closing::*;
 use crate::parameters::parameterset::LoopEntry;
+
 
 pub static LOOPS: &[LoopEntry] = &[ ];
 
@@ -50,14 +52,10 @@ pub static DNA_MATHEWS_2004: RNAThermoParams = RNAThermoParams {
 
     duplex_init_en37:  100,
     duplex_init_enth: -720,
-    terminal_ru_en37:    0,
-    terminal_ru_enth:  320,
-    terminal_ap_en37:    0, // DUMMY
-    terminal_ap_enth:  320, // DUMMY
-    terminal_iu_en37:    0, // DUMMY
-    terminal_iu_enth:  320, // DUMMY
-    terminal_ci_en37:    0, // DUMMY
-    terminal_ci_enth:    0, // DUMMY
+
+    closing_en37: &CLOSING_PEN37,
+    closing_enth: &CLOSING_ENTH,
+   
     lxc: 107.856,
 
     ninio_en37: 40,

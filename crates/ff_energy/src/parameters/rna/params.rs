@@ -7,6 +7,7 @@ use crate::parameters::rna_turner_2004::turner2004_loops::*;
 use crate::parameters::rna_turner_2004::turner2004_dangles::*;
 use crate::parameters::rna::extended_stacks::*;
 use crate::parameters::rna::extended_hairpins::*;
+use crate::parameters::rna::extended_closing::*;
 
 pub static RNA_EXTENDED: RNAThermoParams = RNAThermoParams {
     stack_en37: &STACK_EN37,
@@ -46,15 +47,12 @@ pub static RNA_EXTENDED: RNAThermoParams = RNAThermoParams {
 
     duplex_init_en37:  410,
     duplex_init_enth:  360,
-    terminal_ru_en37:   50,
-    terminal_ru_enth:  370,
-    terminal_ap_en37:   31,
-    terminal_ap_enth: -204,
-    terminal_iu_en37: -133,
-    terminal_iu_enth:   -8,
-    terminal_ci_en37:   -8,
-    terminal_ci_enth:  200,
+
+    closing_en37: &CLOSING_PEN37,
+    closing_enth: &CLOSING_ENTH,
+
     lxc: 107.856,
+
 
     ninio_en37:  60,
     ninio_enth: 320,

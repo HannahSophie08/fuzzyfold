@@ -9,5 +9,6 @@ pub mod andronescu2007_int21;
 pub mod andronescu2007_int22;
 pub mod andronescu2007_loops;
 pub mod andronescu2007_hairpins;
+pub mod andronescu2007_closing;
 
 pub use params::*;

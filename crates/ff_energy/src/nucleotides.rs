@@ -1,7 +1,6 @@
 use std::fmt;
 use std::borrow::Borrow;
 use std::ops::Deref;
-use crate::parameters::*;
 
 #[derive(Debug)]
 pub enum SequenceError {
@@ -296,10 +295,6 @@ impl PairTypeRNA {
         FALLBACK_LOOKUP[pair.0 as usize][pair.1 as usize]
     }
 
-    pub fn closing_penalty_class(&self) -> ClosingPenalty {
-        PAIR_CLOSING_PENALTY[*self as usize]
-    }
-
     pub fn is_wcf(&self) -> bool {
        matches!(self
             , PairTypeRNA::GC | PairTypeRNA::CG 
@@ -317,44 +312,4 @@ impl PairTypeRNA {
     pub fn invert(&self) -> PairTypeRNA {
         PAIR_INVERT[*self as usize]
     }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum ClosingPenalty { 
-    RU, // AU, UA, GU, UG
-    AP, // AP, PA
-    IU, // IU, UI
-    CI, // CI, IC
-    NoPenalty // CG, GC
-}
-
-pub const PAIR_CLOSING_PENALTY: [ClosingPenalty; E] = [
-    /* AU */ ClosingPenalty::RU, 
-    /* UA */ ClosingPenalty::RU, 
-    /* CG */ ClosingPenalty::NoPenalty,
-    /* GC */ ClosingPenalty::NoPenalty,
-    /* GU */ ClosingPenalty::RU,
-    /* UG */ ClosingPenalty::RU,
-    /* AP */ ClosingPenalty::AP,
-    /* PA */ ClosingPenalty::AP,
-    /* IU */ ClosingPenalty::IU,
-    /* UI */ ClosingPenalty::IU,
-    /* CI */ ClosingPenalty::CI,
-    /* IC */ ClosingPenalty::CI,
-];
-
-pub fn build_closing_penalty(terminal_ru: i32, terminal_ap: i32, terminal_iu: i32, terminal_ci: i32) -> [i32; E] {
-
-    let mut closing_penalties = [0; E];
-
-    for (i, class) in PAIR_CLOSING_PENALTY.iter().enumerate() {
-        closing_penalties[i] = match class {
-            ClosingPenalty::NoPenalty => 0,
-            ClosingPenalty::RU => terminal_ru,
-            ClosingPenalty::AP => terminal_ap,
-            ClosingPenalty::IU => terminal_iu,
-            ClosingPenalty::CI => terminal_ci,
-        };
-    }
-    closing_penalties
 }

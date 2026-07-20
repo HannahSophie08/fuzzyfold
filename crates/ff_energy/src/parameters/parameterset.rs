@@ -16,6 +16,7 @@ pub type Int22Params = [[[[[[i32; B]; B]; B]; B]; P]; P];
 
 pub const E: usize = 12;  // AU, UA, CG, GC, GU, UG, AP, PA, IU, UI, CI, IC
 pub type ExtendedStackParams = [[Option<i32>; E]; E];
+pub type ClosingParams = [i32; E];
 
 #[derive(Copy, Clone, Debug)]
 pub struct LoopEntry {
@@ -65,14 +66,8 @@ pub struct RNAThermoParams {
     // Misc parameters
     pub duplex_init_en37: i32,
     pub duplex_init_enth: i32,
-    pub terminal_ru_en37: i32,
-    pub terminal_ru_enth: i32,
-    pub terminal_ap_en37: i32,
-    pub terminal_ap_enth: i32,
-    pub terminal_iu_en37: i32,
-    pub terminal_iu_enth: i32,
-    pub terminal_ci_en37: i32,
-    pub terminal_ci_enth: i32,
+    pub closing_en37: &'static ClosingParams,
+    pub closing_enth: &'static ClosingParams,
     pub lxc: f64,
     // NINIO parameters
     pub ninio_en37: i32,

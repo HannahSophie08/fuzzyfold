@@ -6,7 +6,6 @@ use crate::Base;
 use crate::PairTypeRNA;
 use crate::EnergyModel;
 use crate::EnergyError;
-use crate::build_closing_penalty;
 use crate::parameters::*;
 use crate::LoopDecomposition;
 use crate::NearestNeighborLoop;
@@ -48,7 +47,7 @@ pub struct ViennaRNA {
     /// Extrapolation constant for loops with len > 30 based on polymer theory.
     lxc: f64,
 
-    closing_penalty: [i32; E],
+    closing_penalty: ClosingParams,
 
     /// Asymmetric internal loop correction.
     ninio: i32,
@@ -119,7 +118,7 @@ impl ViennaRNA {
             interior: *params.interior,
 
             duplex_init: params.duplex_init,
-            closing_penalty: build_closing_penalty(params.terminal_ru, params.terminal_ap, params.terminal_iu, params.terminal_ci),
+            closing_penalty: *params.closing,
 
             lxc: params.lxc,
 
@@ -165,8 +164,7 @@ impl ViennaRNA {
                 duplex_init: params.duplex_init_en37,
         
 
-                closing_penalty: build_closing_penalty(params.terminal_ru_en37, params.terminal_ap_en37, 
-                        params.terminal_iu_en37, params.terminal_ci_en37),
+                closing_penalty: *params.closing_en37,
 
                 lxc: params.lxc,
 
@@ -209,9 +207,7 @@ impl ViennaRNA {
 
                 duplex_init: rescale_param!(duplex_init, params, scale),
 
-                closing_penalty: build_closing_penalty(rescale_param!(terminal_ru, params, scale), 
-                    rescale_param!(terminal_ap, params, scale), rescale_param!(terminal_iu, params, scale), 
-                    rescale_param!(terminal_ci, params, scale)),
+                closing_penalty: rescale_params!(closing, params, scale),
 
                 lxc: params.lxc * celsius,
 
@@ -305,8 +301,9 @@ impl ViennaRNA {
             },
             (3, 2) | (2, 3) => { //NOTE: SpecialC if C adjacent to paired C missing!
                 self.bulge[1] + 
-                    self.stack[outer as usize][inner as usize]
-                    .ok_or(EnergyError::UnsupportedStacking { outer, inner })?
+                    self.stack[fb_outer as usize][fb_inner as usize]
+                    .ok_or(EnergyError::UnsupportedStacking { outer: fb_outer, inner: fb_inner })?
+                    + pg1 + pg2
             },
             (3, 3) => 
                 self.int11[fb_outer as usize][fb_inner as usize]
