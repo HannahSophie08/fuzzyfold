@@ -93,7 +93,7 @@ impl Default for ViennaRNA {
 impl ViennaRNA {
     /// Initializes a model from fitted parameters, which means there
     /// is no possiblity to change the temperature.
-    pub fn from_andrunescu_params(params: &'static AndronescuParams) -> Self {
+    pub fn from_andronescu_params(params: &'static AndronescuParams) -> Self {
         Self {
             min_hp_size: 3,
             temperature: 37.0,
@@ -301,9 +301,8 @@ impl ViennaRNA {
             },
             (3, 2) | (2, 3) => { //NOTE: SpecialC if C adjacent to paired C missing!
                 self.bulge[1] + 
-                    self.stack[fb_outer as usize][fb_inner as usize]
-                    .ok_or(EnergyError::UnsupportedStacking { outer: fb_outer, inner: fb_inner })?
-                    + pg1 + pg2
+                    self.stack[outer as usize][inner as usize]
+                    .ok_or(EnergyError::UnsupportedStacking { outer, inner })?
             },
             (3, 3) => 
                 self.int11[fb_outer as usize][fb_inner as usize]

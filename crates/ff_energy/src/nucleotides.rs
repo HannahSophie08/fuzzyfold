@@ -187,7 +187,7 @@ impl NucleotideVec {
 }
 
 /// Now we are in RNA territory. Stacking tables now distinguish AP PA pairs
-/// from AU UA pairs, that's why they are listed explcitly 
+/// from AU UA pairs, that's why they are listed explicitly 
 /// (in contrast to AG / GA pairs which are treated always as UG / GU.
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
