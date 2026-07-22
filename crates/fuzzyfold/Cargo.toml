@@ -33,10 +33,6 @@ path = "src/bin/ff-trajectory.rs"
 name = "ff-timecourse"
 path = "src/bin/ff-timecourse.rs"
 
-[[bin]]
-name = "ff-transitions"
-path = "src/bin/ff-transitions.rs"
-
 [dependencies]
 ff_structure.workspace = true
 ff_energy.workspace = true

@@ -1,3 +1,6 @@
+Note: `ff-transitions` is an experimental, pre-publication software. It has to be
+actively enabled in Cargo.toml
+
 # Analyze macrostate transitions.
 `ff-transitions` performs multiple stochastic folding simulations between all
 macrostates, in order to derive the success-probability of a transition and the
