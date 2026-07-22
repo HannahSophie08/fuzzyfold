@@ -26,12 +26,12 @@ name = "ff-explore"
 path = "src/bin/ff-explore.rs"
 
 [[bin]]
-name = "ff-timecourse"
-path = "src/bin/ff-timecourse.rs"
-
-[[bin]]
 name = "ff-trajectory"
 path = "src/bin/ff-trajectory.rs"
+
+[[bin]]
+name = "ff-timecourse"
+path = "src/bin/ff-timecourse.rs"
 
 [[bin]]
 name = "ff-transitions"

@@ -1,5 +1,6 @@
 use serde::{Serialize, Deserialize};
 use std::sync::Arc;
+use std::fmt::Write as _;
 use std::path::Path;
 use std::convert::TryFrom;
 use rand::rng;
@@ -9,10 +10,11 @@ use ff_structure::PairTable;
 use ff_structure::DotBracketVec;
 use ff_energy::EnergyModel;
 
-
+use crate::shift_policy;
+use crate::LoopNeighbors;
+use crate::Walker;
 use crate::RateModel;
-use crate::LoopStructure;
-use crate::LoopStructureSSA;
+use crate::SSA;
 use crate::commit_and_delay::ExitMacrostateRegistry;
 
 type MacrostateID = usize;
@@ -97,25 +99,6 @@ impl ReactiveTrajectoryEnsemble {
         ensembles
     }
 
-    //pub fn split_ensemble(&self, num_splits: usize) -> Vec<Self> {
-    //    if self.successes.is_empty() {
-    //        return vec![];
-    //    }
-
-    //    //TODO: test with num_splits = 0
-    //    let chunk_size = self.successes.len().div_ceil(num_splits);
-    //    self.successes
-    //        .chunks(chunk_size)
-    //        .map(|chunk| Self {
-    //            start: self.start,
-    //            stop: self.stop,
-    //            t_min: chunk.first().map(|t| t.simu_time),
-    //            t_max: chunk.last().map(|t| t.simu_time),
-    //            successes: chunk.to_vec(),
-    //        })
-    //        .collect()
-    //}
-
     pub fn len(&self) -> usize {
         self.successes.len()
     }
@@ -150,6 +133,25 @@ impl ReactiveTrajectoryEnsemble {
 
 }
 
+pub struct CommitAndDelay<'a, E: EnergyModel, R: RateModel> {
+    exit_registry: Arc<ExitMacrostateRegistry<'a, E, R>>,
+    trajectories: Array2<Option<ReactiveTrajectoryEnsemble>>,
+    marginalized: bool,
+}
+
+impl<'a, E: EnergyModel, R: RateModel> From<Arc<ExitMacrostateRegistry<'a, E, R>>> 
+for CommitAndDelay<'a, E, R> {
+    fn from(exit_registry: Arc<ExitMacrostateRegistry<'a, E, R>>
+    ) -> Self {
+        let n = exit_registry.len();
+        Self {
+            exit_registry,
+            trajectories: Array2::from_elem((n, n), None),
+            marginalized: true,
+        }
+    }
+}
+
 impl<'a, E: EnergyModel, R: RateModel> CommitAndDelay<'a, E, R> {
     pub fn merge(&mut self, other: Self) {
         for ((i, j), val) in other.trajectories.indexed_iter() {
@@ -161,32 +163,11 @@ impl<'a, E: EnergyModel, R: RateModel> CommitAndDelay<'a, E, R> {
                 }
             }
         }
-        
-
-        // recompute marginals for self
-        self.recompute_marginals();
+        self.marginalized = false;
     }
-}
 
-pub struct CommitAndDelay<'a, E: EnergyModel, R: RateModel> {
-    exit_registry: Arc<ExitMacrostateRegistry<'a, E, R>>,
-    trajectories: Array2<Option<ReactiveTrajectoryEnsemble>>,
-}
-
-impl<'a, E: EnergyModel, R: RateModel> From<Arc<ExitMacrostateRegistry<'a, E, R>>> 
-for CommitAndDelay<'a, E, R> {
-    fn from(exit_registry: Arc<ExitMacrostateRegistry<'a, E, R>>
-    ) -> Self {
-        let n = exit_registry.len();
-        Self {
-            exit_registry,
-            trajectories: Array2::from_elem((n, n), None),
-        }
-    }
-}
-
-impl<'a, E: EnergyModel, R: RateModel> CommitAndDelay<'a, E, R> {
     /// recompute (0, j) and (i, 0) marginals
+    /// NOTE: this is very wasteful. The marginals do not need to copy all the values!
     pub fn recompute_marginals(&mut self) {
         let nrows = self.trajectories.nrows();
         let ncols = self.trajectories.ncols();
@@ -214,6 +195,11 @@ impl<'a, E: EnergyModel, R: RateModel> CommitAndDelay<'a, E, R> {
                 }
             }
             if !merged.successes.is_empty() {
+                match self.trajectories[(0, 0)].as_mut() {
+                    Some(existing) => existing.successes
+                        .extend_from_slice(&merged.successes),
+                    None => self.trajectories[(0, 0)] = Some(merged.clone()),
+                }
                 self.trajectories[(i, 0)] = Some(merged);
             }
         }
@@ -236,13 +222,14 @@ impl<'a, E: EnergyModel, R: RateModel> CommitAndDelay<'a, E, R> {
                 self.trajectories[(0, j)] = Some(merged);
             }
         }
+        self.marginalized = true;
     }
 
 
     pub fn simulate_from(&mut self, start_id: MacrostateID) {
         let sequence = self.exit_registry.parent_registry().sequence();
-        let energy_model = self.exit_registry.parent_registry().energy_model();
-        let rate_model = self.exit_registry.rate_model();
+        let energy_model = self.exit_registry.parent_registry().energy_model().clone();
+        let rate_model = (*self.exit_registry.rate_model()).clone();
 
         let start_ms = self.exit_registry.exit_macrostates()
             .get(start_id)
@@ -250,15 +237,16 @@ impl<'a, E: EnergyModel, R: RateModel> CommitAndDelay<'a, E, R> {
 
         let start_db = start_ms.get_random_microstate().unwrap();
         let pairings = PairTable::try_from(&start_db).unwrap();
-        let loops = LoopStructure::try_from((&sequence[..], &pairings, energy_model)).unwrap();
-        let mut simulator = LoopStructureSSA::from((loops, rate_model));
+        let moves = LoopNeighbors::try_from((sequence.clone(), 
+                &pairings, energy_model, shift_policy::NoShift)).unwrap();
+        let mut simulator = SSA::from((moves, rate_model));
 
         let mut mean_time = 0.0;
         simulator.simulate(
             &mut rng(), 
             f64::MAX,
             |t, _tinc, flux, ls| {
-                let stop_db = DotBracketVec::from(ls);
+                let stop_db = ls.current_structure();
                 let stop_id = self.exit_registry.parent_registry().classify(&stop_db);
                 //println!("current: {} {} {}", stop_db, stop_id, t);
                 if stop_id != 0usize {
@@ -268,35 +256,6 @@ impl<'a, E: EnergyModel, R: RateModel> CommitAndDelay<'a, E, R> {
                         simu_time: t,
                         mean_time,
                     };
-
-                    //Marginal
-                    self.trajectories
-                        .get_mut((start_id, 0))
-                        .unwrap()
-                        .get_or_insert_with(|| ReactiveTrajectoryEnsemble {
-                            start: start_id,
-                            stop: stop_id,
-                            t_min: None,
-                            t_max: None,
-                            successes: Vec::new(),
-                        })
-                        .successes
-                        .push(traj.clone());
-
-                    //Marginal
-                    self.trajectories
-                        .get_mut((0, stop_id))
-                        .unwrap()
-                        .get_or_insert_with(|| ReactiveTrajectoryEnsemble {
-                            start: start_id,
-                            stop: stop_id,
-                            t_min: None,
-                            t_max: None,
-                            successes: Vec::new(),
-                        })
-                        .successes
-                        .push(traj.clone());
-
                     self.trajectories
                         .get_mut((start_id, stop_id))
                         .unwrap()
@@ -315,12 +274,13 @@ impl<'a, E: EnergyModel, R: RateModel> CommitAndDelay<'a, E, R> {
                 true
             },
         );
+        self.marginalized = false;
     }
 
     pub fn simulate_between(&mut self, start_id: MacrostateID, stop_id: MacrostateID) {
         let sequence = self.exit_registry.parent_registry().sequence();
-        let energy_model = self.exit_registry.parent_registry().energy_model();
-        let rate_model = self.exit_registry.rate_model();
+        let energy_model = self.exit_registry.parent_registry().energy_model().clone();
+        let rate_model = (*self.exit_registry.rate_model()).clone();
 
         let start_ms = self.exit_registry.exit_macrostates()
             .get(start_id)
@@ -328,8 +288,9 @@ impl<'a, E: EnergyModel, R: RateModel> CommitAndDelay<'a, E, R> {
 
         let start_db = start_ms.get_random_microstate().unwrap();
         let pairings = PairTable::try_from(&start_db).unwrap();
-        let loops = LoopStructure::try_from((&sequence[..], &pairings, energy_model)).unwrap();
-        let mut simulator = LoopStructureSSA::from((loops, rate_model));
+        let moves = LoopNeighbors::try_from((sequence.clone(), 
+                &pairings, energy_model, shift_policy::NoShift)).unwrap();
+        let mut simulator = SSA::from((moves, rate_model));
 
         let mut mean_time = 0.0;
         let mut curr_db = start_db;
@@ -339,9 +300,8 @@ impl<'a, E: EnergyModel, R: RateModel> CommitAndDelay<'a, E, R> {
             &mut rng(), 
             f64::MAX,
             |t, _tinc, flux, ls| {
-                let next_db = DotBracketVec::from(ls);
+                let next_db = ls.current_structure();
                 let next_id = self.exit_registry.parent_registry().classify(&next_db);
-                println!("current: {} {} {}", next_db, next_id, t);
                 //TODO: think about this more..
                 if next_id != toggle {
                     if next_id != 0 {
@@ -379,30 +339,41 @@ impl<'a, E: EnergyModel, R: RateModel> CommitAndDelay<'a, E, R> {
         );
     }
 
-    pub fn gather_data(&self) {
-        let split = 0;
+    pub fn to_crn_string(&self, split: usize) -> String {
+        if !self.marginalized {
+            panic!("Compute marginals before exporting CRN!");
+        }
+        let mut out = String::new();
+    
         let mut total = 0;
         for ((i, j), value) in self.trajectories.indexed_iter() {
             if i == 0 {
                 continue;
             } 
             if j == 0 {
+                // Needs correct marginals
                 total = value.as_ref().unwrap().len();
                 continue;
             }
+            let iname = self.exit_registry.parent_registry().macrostates().get(i).unwrap().1.name();
+            let jname = self.exit_registry.parent_registry().macrostates().get(j).unwrap().1.name();
+
             if let Some(ens) = value {
                 let k_alpha = self.exit_registry.exit_macrostates()[i].k_alpha();
+                if split > 0 {
                 for (sid, sms) in ens.split_ensemble(split).iter().enumerate().map(|(i, x)| (i + 1, x)) {
-                    println!("M_{i} -> S{sid}_[{i},{j}] @ {:14.8e} /s", k_alpha * sms.len() as f64 / total as f64);
-                    println!("S{sid}_[{i},{j}] -> M_{j} @ {:14.8e} /s", 1f64/sms.mean_time_stats().unwrap().2);
-
+                    writeln!(out, "{iname} -> T{sid}_{iname}_{jname} [ k = {:14.8e} ]", k_alpha * sms.len() as f64 / total as f64).unwrap();
+                    writeln!(out, "T{sid}_{iname}_{jname} -> {jname} [ k = {:14.8e} ]", 1.0/sms.mean_time_stats().unwrap().2).unwrap();
                 }
-                println!("M_{i} -> T_[{i},{j}] @ {:14.8e} /s", k_alpha * ens.len() as f64 / total as f64);
-                println!("T_[{i},{j}] -> M_{j} @ {:14.8e} /s", 1f64/ens.mean_time_stats().unwrap().2);
+                } else {
+                writeln!(out, "{iname} -> T_{iname}_{jname} [ k = {:14.8e} ]", k_alpha * ens.len() as f64 / total as f64).unwrap();
+                writeln!(out, "T_{iname}_{jname} -> {jname} [ k = {:14.8e} ]", 1.0/ens.mean_time_stats().unwrap().2).unwrap();
+                }
             } else {
-                println!("M_{i} -> M_{j} @ 0");
+                writeln!(out, "# {iname} -> {jname} [ k = 0 ]").unwrap();
             }
         }
+        out
     }
 
     pub fn to_rate_matrix(&self) -> Array2<f64> {
@@ -439,12 +410,12 @@ impl<'a, E: EnergyModel, R: RateModel> CommitAndDelay<'a, E, R> {
 
         // Copy serialized values into the sub-matrix (1.., 1..)
         full.slice_mut(s![1.., 1..]).assign(&serial.trajectories);
-        
 
         // Leave row/col 0 empty or recompute marginals later
         Self {
             exit_registry,
             trajectories: full,
+            marginalized: false,
         }
     }
     pub fn save_json(&self, path: &str) -> anyhow::Result<()> {
@@ -472,11 +443,11 @@ mod tests {
     use std::io::Cursor;
     use ff_energy::ViennaRNA;
     use ff_energy::NucleotideVec;
-    use crate::Metropolis;
+    use crate::Arrhenius;
     use crate::macrostates::MacrostateRegistry;
 
     fn test_ms1() -> std::io::Cursor<&'static [u8]> {
-        Cursor::new(b">lmin=lm1_bh=4.0
+        Cursor::new(b">LM1 lmin=lm1_bh=4.0
         UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC
         .((((....((((.((((........))))..))))....)))).
         ..(((....((((.((((........))))..))))....)))..
@@ -501,7 +472,7 @@ mod tests {
     }
 
     fn test_ms2() -> std::io::Cursor<&'static [u8]> {
-        Cursor::new(b">lmin=lm2_bh=4.0
+        Cursor::new(b">LM2 lmin=lm2_bh=4.0
         UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC
         .((((....)))).((((.((((...))))..)))).........
         .((((....)))).((((.(((.....)))..)))).........
@@ -527,7 +498,7 @@ mod tests {
     }
  
     fn test_ms3() -> std::io::Cursor<&'static [u8]> {
-        Cursor::new(b">lmin=lm3_bh=3.0
+        Cursor::new(b">LM3 lmin=lm3_bh=3.0
         UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC
         .((((....)))).((((........))))...............
         .((((....)))).((((.(....).))))...............
@@ -541,14 +512,14 @@ mod tests {
 
     #[test]
     fn test_commit_and_delay_minimal() {
-        let energy_model = ViennaRNA::default();
+        let energy_model = Arc::new(ViennaRNA::default());
         let seq = NucleotideVec::try_from("UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC").unwrap();
-        let mut registry = MacrostateRegistry::from((&seq, &energy_model));
+        let mut registry = MacrostateRegistry::from((seq, energy_model.clone()));
 
-        registry.insert_from_reader(test_ms1(), "manual").unwrap();
+        registry.insert_from_reader(test_ms1(), "manual", 0).unwrap();
         assert_eq!(registry.len(), 2);
 
-        let rate_model = Metropolis::new(energy_model.temperature(), 1.0);
+        let rate_model = Arrhenius::new(energy_model.temperature(), 1.0, None, None);
         let exitreg = ExitMacrostateRegistry::from((&registry, &rate_model));
 
         let mut cad = CommitAndDelay::from(Arc::new(exitreg));
@@ -562,16 +533,16 @@ mod tests {
 
     #[test]
     fn test_commit_and_delay() {
-        let energy_model = ViennaRNA::default();
+        let energy_model = Arc::new(ViennaRNA::default());
         let seq = NucleotideVec::try_from("UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC").unwrap();
-        let mut registry = MacrostateRegistry::from((&seq, &energy_model));
+        let mut registry = MacrostateRegistry::from((seq, energy_model.clone()));
 
-        registry.insert_from_reader(test_ms1(), "manual").unwrap();
-        registry.insert_from_reader(test_ms2(), "manual").unwrap();
-        registry.insert_from_reader(test_ms3(), "manual").unwrap();
+        registry.insert_from_reader(test_ms1(), "manual", 0).unwrap();
+        registry.insert_from_reader(test_ms2(), "manual", 0).unwrap();
+        registry.insert_from_reader(test_ms3(), "manual", 0).unwrap();
         assert_eq!(registry.len(), 4);
 
-        let rate_model = Metropolis::new(energy_model.temperature(), 1.0);
+        let rate_model = Arrhenius::new(energy_model.temperature(), 1.0, None, None);
         let _exitreg = ExitMacrostateRegistry::from((&registry, &rate_model));
 
         //NOTE: too slow for a unittest at the moment.
