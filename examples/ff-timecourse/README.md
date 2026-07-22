@@ -1,7 +1,7 @@
 # Analyze changes of secondary-structure ensembles over time
 `ff-timecourse` performs multiple stochastic folding simulations in parallel and
 merges them into a unified timeline. This timeline then contains the occupancy
-of predefined macrostates over time. The simulation starts at a provided starting
+of predefined macro-states over time. The simulation starts at a provided starting
 structure. If the strating structure is shorter than the corresponding sequence,
 co-transcriptonal trajectories are simulated and the parameter `--t-ext` must be 
 provided. Note that `ff-timecourse` collects data at specific time points. 
@@ -27,10 +27,10 @@ corresponds to 'local minimum 3'.)*
 To partition the overall secondary-structure ensemble into smaller ensembles of
 interest, we define **macro-states** using files such as `dld1_lm*.ms`.
 
-Example (`dld1_lm3_3.0.ms`):
+Example (`dld1_lm3.ms`):
 
 ```fasta
->LM3 lmin=lm3_bh=3.0
+>LM3 (delta = 3.00)
 UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC
 .((((....)))).((((........))))...............
 .((((....)))).((((.(....).))))...............
@@ -43,9 +43,10 @@ UCAGUCUUCGCUGCGCUGUAUCGAUUCGGUUUCAGUUUUUAUUGC
 ```
 
 Here:
-- The first line defines the **macro-state name** (`LM3`) and, optionally, some more description after a white-space (`lmin=lm3_bh=3.0`).
+- The first line defines the **macro-state name** (`LM3`) and, optionally, some more description after a white-space (`delta 3.00`).
 - The second line specifies the **sequence**.
-- The remaining lines list all **secondary structures** that belong to this macro-state.
+- The remaining lines list all **secondary structures** that belong to this macro-state. Note: Information after the secondary
+structures, like corresponding free energies, are discarded. All structures are re-evaluated upon construction of the macro-state.
 
 Note that the starting structure from `dld1_lm3.na` is part of this macro-state.
 

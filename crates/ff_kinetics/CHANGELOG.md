@@ -4,8 +4,17 @@ All notable changes to this crate will be documented in this file.
 
 ## development
 ### Changed
-- now using truncated macrostate representation, that is, only the set of pairs
-determines a match. This is convenient for co-transcriptional folding.
+- The same macrostate can now be defined at multiple sequence lengths. A flag
+allows for automatic generation of macrostates for shorter lengths during
+co-transcriptional folding. 
+- Timeline printing and visualization has been adapted to merge macrostates 
+with the same name across different sequence lengths.
+
+### Added
+- preliminary commit-and-delay model to ensure compatibility with macrostate updates.
+
+### Removed
+- preliminary interface to merge timelines.
 
 ## 0.4.2 - 2026-06-18
 ### Changed
