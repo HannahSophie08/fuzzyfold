@@ -7,6 +7,7 @@ use crate::parameters::rna_turner_2004::turner2004_int22::*;
 use crate::parameters::rna_turner_2004::turner2004_loops::*;
 use crate::parameters::rna_turner_2004::turner2004_dangles::*;
 use crate::parameters::rna_turner_2004::turner2004_hairpins::*;
+use crate::parameters::rna_turner_2004::turner2004_closing::*;
 
 pub static RNA_TURNER_2004: RNAThermoParams = RNAThermoParams {
     stack_en37: &STACK_EN37,
@@ -46,10 +47,10 @@ pub static RNA_TURNER_2004: RNAThermoParams = RNAThermoParams {
 
     duplex_init_en37: 410,
     duplex_init_enth: 360,
-    terminal_ru_en37:  50,
-    terminal_ru_enth: 370,
-    terminal_ap_en37:  50, // Dummy
-    terminal_ap_enth: 370, // Dummy
+
+    closing_en37: &CLOSING_PEN37,
+    closing_enth: &CLOSING_ENTH,
+
     lxc: 107.856,
 
     ninio_en37:  60,
@@ -70,5 +71,6 @@ pub static RNA_TURNER_2004: RNAThermoParams = RNAThermoParams {
     hexaloops_en37: HEXALOOPS_EN37,
     hexaloops_enth: HEXALOOPS_ENTH,
 };
+
 
 

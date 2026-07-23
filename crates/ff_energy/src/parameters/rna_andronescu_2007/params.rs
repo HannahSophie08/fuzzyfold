@@ -7,6 +7,7 @@ use crate::parameters::rna_andronescu_2007::andronescu2007_int21::*;
 use crate::parameters::rna_andronescu_2007::andronescu2007_int22::*;
 use crate::parameters::rna_andronescu_2007::andronescu2007_loops::*;
 use crate::parameters::rna_andronescu_2007::andronescu2007_hairpins::*;
+use crate::parameters::rna_andronescu_2007::andronescu2007_closing::CLOSING_PEN37;
 
 pub struct AndronescuParams {
     pub stack: &'static ExtendedStackParams,
@@ -26,7 +27,7 @@ pub struct AndronescuParams {
     pub interior: &'static LoopParams,
     // Misc parameters
     pub duplex_init: i32,
-    pub terminal_ru: i32,
+    pub closing: &'static ClosingParams,
     pub lxc: f64,
     // NINIO parameters
     pub ninio: i32,
@@ -62,7 +63,9 @@ pub static RNA_ANDRONESCU_2007: AndronescuParams = AndronescuParams {
     interior: &INTERIOR,
 
     duplex_init: 410,
-    terminal_ru:  11,
+
+    closing: &CLOSING_PEN37,
+    
     lxc: 107.856,
 
     ninio:  50,
@@ -76,5 +79,4 @@ pub static RNA_ANDRONESCU_2007: AndronescuParams = AndronescuParams {
     tetraloops: TETRALOOPS,
     hexaloops: TETRALOOPS,
 };
-
 
