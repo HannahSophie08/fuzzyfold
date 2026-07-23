@@ -7,5 +7,6 @@ pub mod mathews2004_int21;
 pub mod mathews2004_int22;
 pub mod mathews2004_loops;
 pub mod mathews2004_dangles;
+pub mod mathews2004_closing;
 
 pub use params::*;

@@ -14,22 +14,15 @@ pub type Int11Params = [[[[i32; B]; B]; P]; P];
 pub type Int21Params = [[[[[i32; B]; B]; B]; P]; P];
 pub type Int22Params = [[[[[[i32; B]; B]; B]; B]; P]; P];
 
-pub const E: usize = 8;  // AU, UA, CG, GC, GU, UG, AP, PA
+pub const E: usize = 12;  // AU, UA, CG, GC, GU, UG, AP, PA, IU, UI, CI, IC
 pub type ExtendedStackParams = [[Option<i32>; E]; E];
+pub type ClosingParams = [i32; E];
 
 #[derive(Copy, Clone, Debug)]
 pub struct LoopEntry {
     pub seq: &'static [Base],
     pub val: i32,
 }
-
-/* NOTE: With the next modification, we may want to switch to a more
- * general format for end-penalties?:
- * ...but are these energies or penalties?
-pub static CLOSING_PEN37: [i32; 8] = 
-    /* [cl]:   AU     UA     CG     GC     GU     UG     AP     PA */
-           [   50,    50,     0,     0,    50,    50,    31,    31];
-*/
 
 pub struct RNAThermoParams {
     pub stack_en37: &'static ExtendedStackParams,
@@ -65,10 +58,8 @@ pub struct RNAThermoParams {
     // Misc parameters
     pub duplex_init_en37: i32,
     pub duplex_init_enth: i32,
-    pub terminal_ru_en37: i32,
-    pub terminal_ru_enth: i32,
-    pub terminal_ap_en37: i32,
-    pub terminal_ap_enth: i32,
+    pub closing_en37: &'static ClosingParams,
+    pub closing_enth: &'static ClosingParams,
     pub lxc: f64,
     // NINIO parameters
     pub ninio_en37: i32,
@@ -89,5 +80,6 @@ pub struct RNAThermoParams {
     pub hexaloops_en37: &'static [LoopEntry],
     pub hexaloops_enth: &'static [LoopEntry],
 }
+
 
 
