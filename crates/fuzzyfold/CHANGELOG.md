@@ -6,7 +6,9 @@ All notable changes to this crate will be documented in this file.
 ## Added
 - co-transcriptional folding support for ff-timecourse.
 - t-sep commandline parameter for timeline construction.
+- t-lin/t-log logic adapted for timeline construction.
 - preliminary ff-transitions interface to commit-and-delay model.
+- preliminary ff-accessibility interface to compare simulations against probing data.
 
 ## Changed
 - t-ext now explicit for co-transcriptional folding. 

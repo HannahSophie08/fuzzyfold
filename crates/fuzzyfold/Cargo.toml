@@ -42,6 +42,7 @@ colored.workspace = true
 env_logger.workspace = true
 log.workspace = true
 rand.workspace = true
+rustc-hash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 plotters.workspace = true

@@ -9,6 +9,8 @@ allows for automatic generation of macrostates for shorter lengths during
 co-transcriptional folding. 
 - Timeline printing and visualization has been adapted to merge macrostates 
 with the same name across different sequence lengths.
+- co_simulate does now modify the callback to reduce tinc in case it goes beyond
+the current transcription step. 
 
 ### Added
 - preliminary commit-and-delay model to ensure compatibility with macrostate updates.

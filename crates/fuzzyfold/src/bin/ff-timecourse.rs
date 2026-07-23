@@ -89,7 +89,7 @@ fn main() -> Result<()> {
     println!("Output after {} simulations: \n - {:?}\n - {:?}\n - {:?}",
         cli.num_sims, cli.kinetics, cli.simulation, cli.energy);
 
-    let times = cli.simulation.get_output_times(num_ext);
+    let times = cli.simulation.get_output_times(num_ext)?;
 
     let (sim_times, t_fin) = if num_ext > 0 {
         let t_ext = cli.simulation.t_ext.unwrap();

@@ -67,8 +67,8 @@ pub struct TimelineParameters {
 
     /// Number of time points on the linear scale. Default = 0 is a hack to default to 1 in full-length mode,
     /// and end-of-transcription in co-transcriptional mode.
-    #[arg(long, default_value_t = 0)]
-    pub t_lin: usize, 
+    #[arg(long)]
+    pub t_lin: Option<usize>, 
 
     /// Number of time points on the logarithmic scale.
     #[arg(long, default_value_t = 50)]
@@ -85,12 +85,12 @@ impl TimelineParameters {
         }
 
         // Set default values for t_sep in case it is not set by user.
-        if self.t_lin == 0 {
+        if self.t_lin.is_none() {
             // full-length mode or if t-sep is set.
             if self.t_ext.is_none() || self.t_sep.is_some() { 
-                self.t_lin = 50;
+                self.t_lin = Some(50);
             } else { // co-transcriptional mode
-                self.t_lin = num_ext;
+                self.t_lin = Some(num_ext);
             }
         } 
 
@@ -117,13 +117,23 @@ impl TimelineParameters {
         Ok(())
     }
 
-    pub fn get_output_times(&self, num_ext: usize) -> Vec<f64> {
+    pub fn get_output_times(&self, num_ext: usize) -> Result<Vec<f64>> {
         let t_end = self.t_end;
-        let t_lin = self.t_lin;
+        let t_lin = self.t_lin.expect("t-lin has to be set during validation!");
         let t_log = self.t_log;
         let t_sep = self.t_sep.expect("t-sep has to be set during validation!");
-        let mut times = vec![0.0];
+        let end = if let Some(t_ext) = self.t_ext {
+            t_ext * num_ext.as_f64() + t_end
+        } else { t_end };
 
+        if t_lin == 0 {
+            if t_log != 1 {
+                bail!("If t_lin == 0, then t_log = 1! (A special hack to support single-output mode).");
+            }
+            return Ok(vec![end]);
+        }
+
+        let mut times = vec![0.0];
         let start = *times.last().unwrap();
         let step = t_sep / t_lin as f64;
         for i in 1..=t_lin {
@@ -133,9 +143,6 @@ impl TimelineParameters {
         // Logarithmic tail: append 't_log logarithmic timepoints between t-sep...t_end
         let start = *times.last().unwrap();
         let log_start = start.ln();
-        let end = if let Some(t_ext) = self.t_ext {
-            t_ext * num_ext.as_f64() + t_end
-        } else { t_end };
         let log_end = end.ln();
         for i in 1..t_log {
             let frac = i as f64 / t_log as f64;
@@ -144,7 +151,7 @@ impl TimelineParameters {
         }
         times.push(end);
 
-        times
+        Ok(times)
     }
 }
 
