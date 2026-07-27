@@ -49,7 +49,11 @@ fn main() -> Result<()> {
 
     writer.write_record(&["start", "end", "accessibilities"])?;
 
-    for (start, end) in &coordinates {
+    let total = coordinates.len();
+
+    for (i, (start, end)) in coordinates.iter().enumerate() {
+
+        println!("{}/{}", i+1, total);
         let seq = get_sequence(*start, *end, genome.clone())?;
         let accessibility: Vec<f64> = run_ff_accessibility("./target/release/ff-accessibility", &seq, cli.num_sims)
             .with_context(|| format!("simulation failed on coordinates {}-{}", start, end))?;
