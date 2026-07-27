@@ -26,12 +26,13 @@ use ff_kinetics::timeline::Timeline;
 use ff_kinetics::timeline_plotting::plot_occupancy_over_time;
 use ff_kinetics::MacrostateRegistry;
 
+use fuzzyfold::input_parsers::read_cotr_input;
 use fuzzyfold::input_parsers::read_eval_input;
 use fuzzyfold::energy_parsers::EnergyModelArguments;
 use fuzzyfold::kinetics_parsers::RateModelArguments;
 use fuzzyfold::kinetics_parsers::TimelineParameters;
 
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 #[command(version, about = "Stochastically simulated nucleic acid ensembles over time.")]
 pub struct Cli {
     /// Input file (FASTA-like), or "-" for stdin
@@ -47,6 +48,9 @@ pub struct Cli {
     #[arg(short, long, value_name = "FILE")]
     output: PathBuf,
 
+    #[arg(short, long)]
+    title: Option<String>,
+
     #[command(flatten, next_help_heading = "Simulation parameters")]
     simulation: TimelineParameters,
 
@@ -58,33 +62,55 @@ pub struct Cli {
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
-    cli.simulation.validate()?;
-
-    // --- Build simulator ---
+    let mut cli = Cli::parse();
     let emodel = Arc::new(cli.energy.build_model());
     let rmodel = cli.kinetics.build_model(emodel.temperature());
 
     let is_rna = cli.energy.dna.is_none();
-    let (header, sequence, structure) = read_eval_input(&cli.input, is_rna)?;
+    let (header, sequence, structure) =
+        if cli.simulation.t_ext.is_some() {
+            read_cotr_input(&cli.input, is_rna)?
+        } else {
+            match read_eval_input(&cli.input, is_rna) {
+                Ok(v) => v,
+                Err(e) => return Err(anyhow::anyhow!("{e} (or use --t-ext?)")),
+            }
+        };
+    let num_ext = sequence.len() - structure.len();
+    cli.simulation.validate(cli.kinetics.k0, num_ext)?;
+    let t_sep = cli.simulation.t_sep.expect("t-sep must exist after validation!");
     let pairings = PairTable::try_from(&structure)?;
 
     if let Some(h) = header {
         println!("{}", h.yellow());
-    } 
+    }
     println!("{}", sequence);
-
+ 
     println!("Output after {} simulations: \n - {:?}\n - {:?}\n - {:?}",
         cli.num_sims, cli.kinetics, cli.simulation, cli.energy);
 
-    let times = cli.simulation.get_output_times();
+    let times = cli.simulation.get_output_times(num_ext)?;
+
+    let (sim_times, t_fin) = if num_ext > 0 {
+        let t_ext = cli.simulation.t_ext.unwrap();
+        let t_end = cli.simulation.t_end;
+        let mut a = vec![t_ext; num_ext];
+        a.push(t_end);
+        (a, t_ext * (num_ext as f64) + t_end)
+    } else { 
+        (vec![cli.simulation.t_end], cli.simulation.t_end)
+    };
+                                                                            //
     let mut macrostates = MacrostateRegistry::from((sequence.clone(), emodel.clone()));
-    macrostates.insert_files(&cli.macrostates)?;
+    macrostates.insert_files(&cli.macrostates, cli.simulation.t_ext.is_some())?;
     // Verbose Output
     println!("{:>4} {:<10} {} {:>5} {:>8}",
         "ID",
         "Macrostate".cyan(), format!("{}", sequence).yellow(), "Size", "Energy");
-    for (id, m) in macrostates.iter() {
+    for (id, (l, m)) in macrostates.iter() {
+        if *l != sequence.len() {
+            continue
+        }
         if m.name() == "Unassigned" {
             println!("{:4} {:<10}", 0, m.name());
             continue
@@ -98,6 +124,7 @@ fn main() -> Result<()> {
     }
     let shared_macrostates = Arc::new(macrostates);
 
+    // Output paths 
     let tln_path = cli.output.with_extension("tln");
     let svg_path = cli.output.with_extension("svg");
     let nxy_path = cli.output.with_extension("nxy");
@@ -117,25 +144,25 @@ fn main() -> Result<()> {
             (false, false) => {
                 let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, NoShift))
                     .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_timecourse(moves, rmodel, cli.simulation.t_end, cli.num_sims as u64,
+                run_timecourse(moves, rmodel, &sim_times, cli.num_sims as u64,
                     Arc::clone(&shared_macrostates), &times).collect()
             },
             (true, false) => {
                 let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, ThreeWayOnly))
                     .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_timecourse(moves, rmodel, cli.simulation.t_end, cli.num_sims as u64,
+                run_timecourse(moves, rmodel, &sim_times, cli.num_sims as u64,
                     Arc::clone(&shared_macrostates), &times).collect()
             },
             (false, true) => {
                 let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, FourWayOnly))
                     .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_timecourse(moves, rmodel, cli.simulation.t_end, cli.num_sims as u64,
+                run_timecourse(moves, rmodel, &sim_times, cli.num_sims as u64,
                     Arc::clone(&shared_macrostates), &times).collect()
             },
             (true, true) => {
                 let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, ThreeAndFour))
                     .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_timecourse(moves, rmodel, cli.simulation.t_end, cli.num_sims as u64,
+                run_timecourse(moves, rmodel, &sim_times, cli.num_sims as u64,
                     Arc::clone(&shared_macrostates), &times).collect()
             },
         };
@@ -149,13 +176,33 @@ fn main() -> Result<()> {
     // save / print / plot.
     let mut writer = BufWriter::new(File::create(nxy_path.clone())?);
     write!(writer, "{}", master)?;
-    println!("Wrote nxy file: {}", format!("{}",nxy_path.display()).green());
-    plot_occupancy_over_time(&master, svg_path.clone(), cli.simulation.t_ext, cli.simulation.t_end);
-    println!("Plotted svg file: {}", svg_path.display());
+    println!("Wrote nxy file: {}", format!("{}",nxy_path.display()).green());    
     let serial = master.to_serializable();
     let json = to_string_pretty(&serial).unwrap();
     fs::write(tln_path.clone(), json).unwrap();
     println!("Wrote tln file: {}", tln_path.display());
+
+    let numsim = master.points[0].counter;
+    let title = cli.title.unwrap_or({
+        format!("ff-timecourse ({} simulations)", 
+        {
+            if numsim >= 10000 {
+                let s = numsim.to_string();
+                let mut out = String::new();
+                for (i, c) in s.chars().rev().enumerate() {
+                    if i > 0 && i % 3 == 0 {
+                        out.push('_');
+                    }
+                    out.push(c);
+                }
+                out.chars().rev().collect::<String>()
+            } else { 
+                numsim.to_string()
+            }
+        })
+    });
+    plot_occupancy_over_time(&master, svg_path.clone(), &title, t_sep, t_fin);
+    println!("Wrote svg file: {}", svg_path.display());
 
     Ok(())
 }
@@ -164,15 +211,15 @@ fn main() -> Result<()> {
 fn run_timecourse<W, K, E>(
     moves: W,
     rmodel: K,
-    t_end: f64,
+    sim_times: &[f64],
     num_sims: u64,
     registry: Arc<MacrostateRegistry<E>>,
     times: &[f64],
 ) -> impl ParallelIterator<Item = Timeline<E>>
 where
     W: Walker + Clone + Send + Sync,
-    K: RateModel + Clone + Send + Sync,
-    E: EnergyModel + Send + Sync,
+    K: RateModel + Clone,
+    E: EnergyModel,
     SSA<W, K>: From<(W, K)>,
 {
     let pb = ProgressBar::new(num_sims);
@@ -193,9 +240,9 @@ where
 
                 let mut simulator = SSA::from((moves.clone(), rmodel.clone()));
                 let mut t_idx = 0;
-                simulator.simulate(
+                simulator.co_simulate(
                     &mut rng(),
-                    t_end,
+                    sim_times,
                     |t, tinc, _, w| {
                         while t_idx < times.len() && t + tinc >= times[t_idx] {
                             let structure = w.current_structure();

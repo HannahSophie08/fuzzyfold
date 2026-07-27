@@ -25,7 +25,7 @@ pub enum DnaParams {
 #[derive(Debug, Args)]
 pub struct EnergyModelArguments {
     /// Temperature in Celsius
-    #[arg(long, default_value = "37.0")]
+    #[arg(long, default_value = "37.0", allow_hyphen_values = true)]
     pub celsius: f64,
 
     /// Built-in RNA parameter set (default: turner2004ext).
@@ -59,7 +59,7 @@ impl EnergyModelArguments {
                     if self.celsius != 37.0 {
                         panic!("Cannot change temperature for fitted parameters!");
                     }
-                    ViennaRNA::from_andrunescu_params(&RNA_ANDRONESCU_2007)
+                    ViennaRNA::from_andronescu_params(&RNA_ANDRONESCU_2007)
                 },
             }
         } else if let Some(dna_choice) = &self.dna {

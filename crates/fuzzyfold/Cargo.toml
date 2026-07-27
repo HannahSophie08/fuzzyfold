@@ -1,6 +1,6 @@
 [package]
 name = "fuzzyfold"
-version = "0.4.1"
+version = "0.4.2"
 description = "Nucleic acid secondary structure kinetics."
 documentation = "https://docs.rs/fuzzyfold"
 keywords = ["dna", "rna", "secondary-structure", "kinetics", "nearest-neighbor"]
@@ -26,12 +26,12 @@ name = "ff-explore"
 path = "src/bin/ff-explore.rs"
 
 [[bin]]
-name = "ff-timecourse"
-path = "src/bin/ff-timecourse.rs"
-
-[[bin]]
 name = "ff-trajectory"
 path = "src/bin/ff-trajectory.rs"
+
+[[bin]]
+name = "ff-timecourse"
+path = "src/bin/ff-timecourse.rs"
 
 [dependencies]
 ff_structure.workspace = true
@@ -42,8 +42,10 @@ colored.workspace = true
 env_logger.workspace = true
 log.workspace = true
 rand.workspace = true
+rustc-hash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+plotters.workspace = true
 
 anyhow = "1.0.100"
 clap = { version = "4.5.54", features = ["derive"] }
@@ -53,4 +55,3 @@ rayon = "1.11.0"
 
 [badges]
 maintenance = { status = "actively-developed" }
-

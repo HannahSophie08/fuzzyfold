@@ -2,6 +2,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::error::Error;
 use nohash_hasher::IntMap;
+use rustc_hash::FxHashMap;
 
 use ff_energy::EnergyModel;
 use ff_structure::DotBracketVec; 
@@ -154,23 +155,54 @@ impl<E: EnergyModel> Timeline<E> {
     }
 }
 
-
 impl<E: EnergyModel> fmt::Display for Timeline<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let macrostates = self.registry.macrostates();
 
+        // Group indices by macrostate name, preserving first-seen order
+        // for a stable, canonical column ordering across all lengths.
+        let mut name_order: Vec<&str> = Vec::new();
+        let mut name_to_indices: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
+        for (idx, (_len, ms)) in macrostates.iter().enumerate() {
+            let name = ms.name();
+            name_to_indices
+                .entry(name)
+                .or_insert_with(|| {
+                    name_order.push(name);
+                    Vec::new()
+                })
+                .push(idx);
+        }
+
         // Header
         write!(f, "{:>13}", "time")?;
-        for ms in macrostates.iter() {
-            write!(f, " {:>13}", ms.name())?;
+        for name in &name_order {
+            write!(f, " {:>13}", name)?;
         }
         writeln!(f)?;
 
         // Data
         for tp in &self.points {
             write!(f, "{:13.6e}", tp.time)?;
-            for m_idx in 0..macrostates.len() {
-                write!(f, " {:13.6e}", tp.occupancy(m_idx))?;
+            for name in &name_order {
+                let indices = &name_to_indices[name];
+                // Invariant (for now): at most one length-variant of a
+                // given macrostate should carry nonzero occupancy at any
+                // single timepoint. If that stops being true by design
+                // (e.g. mass genuinely split across length-variants),
+                // drop this debug_assert — the sum below already does
+                // the right thing either way.
+                let nonzero_variants = indices.iter()
+                    .filter(|&&i| tp.occupancy(i) != 0.0)
+                    .count();
+                debug_assert!(
+                    nonzero_variants <= 1,
+                    "macrostate '{}' has nonzero occupancy at {} length-variants \
+                     simultaneously (indices {:?}) at t={}",
+                    name, nonzero_variants, indices, tp.time
+                );
+                let occ: f64 = indices.iter().map(|&i| tp.occupancy(i)).sum();
+                write!(f, " {:13.6e}", occ)?;
             }
             writeln!(f)?;
         }

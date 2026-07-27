@@ -65,11 +65,19 @@ impl<W: Walker, K: RateModel> SSA<W, K> {
 
         let mut gtime = 0.0;
         for (idx, &time) in times.iter().enumerate() {
-            // Wrap the user callback
+            // Wrap the user callback. There is a subtle fix of a bug here: If
+            // the true tinc were to be returned, then the calling function
+            // would have to check if the time-increment exceeds the threshold
+            // for extension time. That is easily overlooked, so we return a
+            // tinc value that is at most some epsilon larger than the extension
+            // time. If the caller wants to record output within that epsilon,
+            // then that's bad luck.
+            let eps = time / 1000.0;
             let mut co_callback = |t: f64, tinc: f64, 
                 rsum: f64, w: &W| {
-                    callback(t + gtime, tinc, rsum, w)
+                    callback(t + gtime, tinc.min(time - t + eps), rsum, w)
             };
+
             let cb = self.simulate(rng, time, &mut co_callback);
 
             // Skip extension after the last time point

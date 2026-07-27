@@ -2,6 +2,31 @@
 
 All notable changes to this crate will be documented in this file.
 
+## development
+### Changed
+- The same macrostate can now be defined at multiple sequence lengths. A flag
+allows for automatic generation of macrostates for shorter lengths during
+co-transcriptional folding. 
+- Timeline printing and visualization has been adapted to merge macrostates 
+with the same name across different sequence lengths.
+- co_simulate does now modify the callback to reduce tinc in case it goes beyond
+the current transcription step. 
+
+### Added
+- preliminary commit-and-delay model to ensure compatibility with macrostate updates.
+
+### Removed
+- preliminary interface to merge timelines.
+
+## 0.4.2 - 2026-06-18
+### Changed
+- no more lifetimes for macrostate interface to facilitate exports to python.
+- default timeline visualization.
+
+### Added
+- preliminary interface to merge timelines.
+- shift_analysis feature to report shift-move activation energies as they are calculated.
+
 ## 0.4.1 - 2026-03-04
 ### Changed
 - added Arrhenius, removed Metropolis/Kawasaki

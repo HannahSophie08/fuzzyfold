@@ -1,52 +1,33 @@
-use ff_energy::EnergyModel;
 use std::path::Path;
+use rustc_hash::FxHashMap;
 use plotters::prelude::*;
 use plotters::style::Palette99;
 
+use ff_energy::EnergyModel;
 use crate::timeline::Timeline;
 
-pub fn plot_occupancy_over_time<'a, E: EnergyModel>(
+pub fn plot_occupancy_over_time<E: EnergyModel>(
     timeline: &Timeline<E>, 
     filename: impl AsRef<Path>,
+    title: &str,
     t_lin: f64,
     t_log: f64,
 ) {
     assert!(t_lin > 0.0 && t_log > t_lin, "Require 0 < t_lin < t_log");
 
-    let numsim = timeline.points[0].counter;
-    let title = format!("ff-timecourse ({} simulations)", 
-        {
-            if numsim >= 10000 {
-                let s = numsim.to_string();
-                let mut out = String::new();
-
-                for (i, c) in s.chars().rev().enumerate() {
-                    if i > 0 && i % 3 == 0 {
-                        out.push('_');
-                    }
-                    out.push(c);
-                }
-
-                out.chars().rev().collect::<String>()
-            } else { 
-                numsim.to_string()
-            }
-        }
-    );
-
     // Image size; tweak as you like
-    //let root = BitMapBackend::new(filename, (1024, 480)).into_drawing_area();
+    // let root = BitMapBackend::new(filename, (1024, 480)).into_drawing_area();
     let root = SVGBackend::new(filename.as_ref(), (1024, 480)).into_drawing_area();
     root.fill(&WHITE).unwrap();
-    root.titled(&title, ("sans-serif", 28)).unwrap();
+    root.titled(title, ("sans-serif", 28)).unwrap();
     root.draw_text(
         "time",
         &("sans-serif", 22).into_font().into_text_style(&root),
-        (496, 450),   // roughly centered at bottom
+        (496, 450), // roughly centered at bottom
     ).unwrap();
 
 
-    let eps = 1e-9; // epsilon for plot labels
+    let eps = 1e-12; // epsilon for plot labels
     // Split into two panels: 50% for linear (left), 50% for log (right)
     let (left, right) = root.split_horizontally(512);
 
@@ -61,11 +42,12 @@ pub fn plot_occupancy_over_time<'a, E: EnergyModel>(
         .build_cartesian_2d(0.0..(t_lin+eps), 0.0..1.0).unwrap();
     chart_left
         .configure_mesh()
-        //.x_desc("liner scale")
         .y_desc("occupancy")
         .x_labels(6)
+        .x_label_formatter(&|x| if *x < 0.01 {format!("{:.1e}", x)} else {format!("{}", x)})  // scientific notation
         .y_labels(10)
         .light_line_style(RGBColor(220, 220, 220))
+        .light_line_style(TRANSPARENT)
         .axis_desc_style(("sans-serif", 22))
         .label_style(("sans-serif", 18))
         .draw()
@@ -86,16 +68,16 @@ pub fn plot_occupancy_over_time<'a, E: EnergyModel>(
         .margin_right(40)
         .x_label_area_size(40)
         .y_label_area_size(0) // hide y labels on right
-        .build_cartesian_2d(((t_lin - eps)..(t_log + eps)).log_scale(), 0.0..1.0)
+        .build_cartesian_2d(((t_lin+eps)..(t_log + eps)).log_scale(), 0.0..1.0)
         .unwrap();
 
     chart_right
         .configure_mesh()
-        //.x_desc("log scale")
         .x_labels(6)
         .x_label_formatter(&|x| if *x < 0.01 {format!("{:.1e}", x)} else {format!("{}", x)})  // scientific notation
         .y_labels(10) // hide y ticks on right
         .light_line_style(RGBColor(220, 220, 220))
+        .light_line_style(TRANSPARENT)
         .label_style(("sans-serif", 18))
         .draw().unwrap();
 
@@ -106,13 +88,41 @@ pub fn plot_occupancy_over_time<'a, E: EnergyModel>(
     ))).unwrap();
 
 
-    // Build data per structure
-    let mut trajectories: Vec<(usize, Vec<(f64, f64, f64)>)> = Vec::new();
+    // Group indices by macrostate name, preserving first-seen order.
+    let macrostates = timeline.registry.macrostates();
+    let mut name_order: Vec<&str> = Vec::new();
+    let mut name_to_indices: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
+    for (idx, (_len, ms)) in macrostates.iter().enumerate() {
+        let name = ms.name();
+        name_to_indices
+            .entry(name)
+            .or_insert_with(|| {
+                name_order.push(name);
+                Vec::new()
+            })
+        .push(idx);
+        }
 
-    for (id, _) in timeline.registry.iter() {
+    // Build data per macrostate name
+    let mut trajectories: Vec<(&str, Vec<(f64, f64, f64)>)> = Vec::new();
+    for name in &name_order {
+        let indices = &name_to_indices[name];
         let mut series = Vec::new();
         for tp in &timeline.points {
-            let count = tp.ensemble.get(&id).copied().unwrap_or(0);
+            // Same invariant as the Display impl: at most one length-variant
+            // should carry nonzero count at any given timepoint, for now.
+            let nonzero_variants = indices.iter()
+                .filter(|&&i| tp.ensemble.get(&i).copied().unwrap_or(0) > 0)
+                .count();
+            debug_assert!(
+                nonzero_variants <= 1,
+                "macrostate '{}' has nonzero count at {} length-variants \
+                simultaneously (indices {:?}) at t={}",
+                name, nonzero_variants, indices, tp.time
+            );
+            let count: usize = indices.iter()
+                .map(|&i| tp.ensemble.get(&i).copied().unwrap_or(0))
+                .sum();
             let occu = if tp.counter > 0 {
                 count as f64 / tp.counter as f64
             } else { 0.0 };
@@ -121,20 +131,17 @@ pub fn plot_occupancy_over_time<'a, E: EnergyModel>(
             } else { 0.0 };
             series.push((tp.time, occu, se));
         }
-        if series.iter().any(|(_, occu, _)| *occu >= 0.02) { // threshold filter
-            trajectories.push((id, series));
+        if *name == macrostates[0].1.name() || series.iter().any(|(_, occu, _)| *occu >= 0.02) {
+            trajectories.push((name, series));
         }
     }
 
     // Sort by ID to have consistent colors
-    trajectories.sort_by_key(|(id, _)| *id);
+    //trajectories.sort_by_key(|(id, _)| *id);
 
     // Find global Y max for normalization
-    for (i, (id, series)) in trajectories.iter().enumerate() {
+    for (i, (name, series)) in trajectories.iter().enumerate() {
         let color = Palette99::pick(i).mix(0.9); // pick a distinct color
-
-        let name = timeline.registry.macrostates()[*id].name();
-        let energy = timeline.registry.macrostates()[*id].ensemble_energy().unwrap_or(0.0);
 
         let z = 1.0; // or 1.96 for 95%
         let band_color = color.mix(0.2);
@@ -152,7 +159,7 @@ pub fn plot_occupancy_over_time<'a, E: EnergyModel>(
         )).unwrap();
 
         chart_left.draw_series(LineSeries::new(
-                series.iter().cloned().map(|(t, p, _)| (t, p)).filter(|(t, _)| *t <= t_lin),
+                series.iter().cloned().map(|(t, p, _)| (t, p)).filter(|(t, _)| *t <= t_lin + eps),
                 color.stroke_width(2),
         )).unwrap();
 
@@ -164,10 +171,10 @@ pub fn plot_occupancy_over_time<'a, E: EnergyModel>(
         )).unwrap();
  
         chart_right.draw_series(LineSeries::new(
-            series.iter().cloned().map(|(t, p, _)| (t, p)).filter(|(t, _)| *t >= t_lin),
+            series.iter().cloned().map(|(t, p, _)| (t, p)).filter(|(t, _)| *t >= t_lin - eps),
             color.stroke_width(2),
         )).unwrap()
-            .label(format!("{:20} {:>6.2}", name.trim(), energy))   // <-- label for legend
+            .label(name.to_string())   // <-- label for legend
             .legend(move |(x, y)| {
                 PathElement::new(vec![(x, y), (x + 20, y)], color.stroke_width(2))
             });

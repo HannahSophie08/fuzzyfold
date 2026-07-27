@@ -2,6 +2,26 @@
 
 All notable changes to this crate will be documented in this file.
 
+## development
+## Added
+- co-transcriptional folding support for ff-timecourse.
+- t-sep commandline parameter for timeline construction.
+- t-lin/t-log logic adapted for timeline construction.
+- preliminary ff-transitions interface to commit-and-delay model.
+- preliminary ff-accessibility interface to compare simulations against probing data.
+
+## Changed
+- t-ext now explicit for co-transcriptional folding. 
+
+## [0.4.2] - 2026-02-26
+## Added
+- fasta flag for ff-trajectory
+- title option for ff-timecourse
+
+## Changed
+- ff-timecourse output format is now *.nxy
+- Now allowing negative temperature (Celsius).
+
 ## [0.4.1] - 2026-02-26
 ## Changed
 - Updates for energy evaluation (compiled parameters only, P support).

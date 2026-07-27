@@ -2,6 +2,23 @@
 
 All notable changes to this crate will be documented in this file.
 
+## Development
+### Fixed
+- GU stacking enthalpies.
+
+### Added
+- Inosine parameters.
+
+## [0.4.1] - 2026-06-18
+### Fixed
+- Revised duplicate hairpin free-energy parameters.
+
+### Added
+- is_stack for NearestNeighborLoop (helper for shift-classification).
+
+### Changed
+- Added Send + Sync supertrait for Energy-model.
+
 ## [0.4.0] - 2026-03-04
 ### Fixed
 - Mayor compile-time boost.
@@ -28,4 +45,3 @@ All notable changes to this crate will be documented in this file.
 
 ### Removed
 - Preliminary implementations for coaxial stacking.
-
