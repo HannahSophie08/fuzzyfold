@@ -508,9 +508,7 @@ impl EnergyModel for ViennaRNA {
     }
 
     fn can_pair(&self, b1: Base, b2: Base) -> bool {
-        CAN_PAIR
-            [b1.canonical_rna_index()]
-            [b2.canonical_rna_index()]
+        PairTypeRNA::from((b1,b2)).can_pair()
     }
 
     fn min_hairpin_size(&self) -> usize { self.min_hp_size }
