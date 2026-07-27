@@ -1,3 +1,4 @@
+use std::env;
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::path::PathBuf;
@@ -32,10 +33,11 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let is_rna = false;
     let (header, sequence, _structure) = read_fasta_file(&cli.input, is_rna)?;
-
     let genome = sequence.to_string();
 
     let coordinates = read_coordinates(&cli.coordinates)?;
+
+    let accessibility_path = find_ff_accessibility("ff-accessibility")?;
 
     let csv_path = cli.output.with_extension("csv");
     let mut file = File::create(&csv_path)
@@ -55,7 +57,7 @@ fn main() -> Result<()> {
 
         println!("{}/{}", i+1, total);
         let seq = get_sequence(*start, *end, genome.clone())?;
-        let accessibility: Vec<f64> = run_ff_accessibility("./target/release/ff-accessibility", &seq, cli.num_sims)
+        let accessibility: Vec<f64> = run_ff_accessibility(&accessibility_path, &seq, cli.num_sims)
             .with_context(|| format!("simulation failed on coordinates {}-{}", start, end))?;
 
         let result = accessibility 
@@ -68,6 +70,15 @@ fn main() -> Result<()> {
     }
     writer.flush()?;
     Ok(())
+}
+
+fn find_ff_accessibility(name: &str) ->Result<PathBuf> {
+
+    let exe_path = env::current_exe().context("failed to determine current executable path!")?;
+    let dir = exe_path.parent().context("executable has no parent directory!")?;
+
+    Ok(dir.join(name))
+
 }
 
 fn read_coordinates(path: &str) -> Result<Vec<(usize, usize)>> {
@@ -109,7 +120,7 @@ fn get_sequence(start: usize, end: usize, genome: String) -> Result<String> {
     Ok(format!("{}{}{}", seq_up, &genome[start..end], seq_dn))
 }
 
-fn run_ff_accessibility(binary_path: &str, sequence: &str, num_sims: usize) -> Result<Vec<f64>> {
+fn run_ff_accessibility(binary_path: &PathBuf, sequence: &str, num_sims: usize) -> Result<Vec<f64>> {
 
     let mut child = Command::new(binary_path)
         .arg("-")
