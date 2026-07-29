@@ -489,18 +489,6 @@ impl ViennaRNA {
     }
 }
 
-const CAN_PAIR: [[bool; 4]; 4] = {
-    use Base::*;
-    let mut table = [[false; 4]; 4];
-    table[A as usize][U as usize] = true;
-    table[U as usize][A as usize] = true;
-    table[C as usize][G as usize] = true;
-    table[G as usize][C as usize] = true;
-    table[G as usize][U as usize] = true;
-    table[U as usize][G as usize] = true;
-    table
-};
-
 impl EnergyModel for ViennaRNA {
  
     fn temperature(&self) -> f64 {
@@ -508,9 +496,7 @@ impl EnergyModel for ViennaRNA {
     }
 
     fn can_pair(&self, b1: Base, b2: Base) -> bool {
-        CAN_PAIR
-            [b1.canonical_rna_index()]
-            [b2.canonical_rna_index()]
+        PairTypeRNA::from((b1,b2)).can_pair()
     }
 
     fn min_hairpin_size(&self) -> usize { self.min_hp_size }
