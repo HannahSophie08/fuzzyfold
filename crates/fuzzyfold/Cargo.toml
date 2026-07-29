@@ -41,6 +41,10 @@ path = "src/bin/ff-accessibility.rs"
 name = "ff-run-accessibility"
 path = "src/bin/ff-run-accessibility.rs"
 
+[[bin]]
+name = "ff-run-RNAsubopt"
+path = "src/bin/ff-run-RNAsubopt.rs"
+
 [dependencies]
 ff_structure.workspace = true
 ff_energy.workspace = true
