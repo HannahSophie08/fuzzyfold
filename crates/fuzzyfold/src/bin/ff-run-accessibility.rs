@@ -26,6 +26,9 @@ pub struct Cli {
 
     #[arg(short, long, default_value_t = 1)]
     num_sims: usize,
+
+    #[arg(long)]
+    row: Option<usize>,
 } 
 
 fn main() -> Result<()> {
@@ -35,7 +38,10 @@ fn main() -> Result<()> {
     let (header, sequence, _structure) = read_fasta_file(&cli.input, is_rna)?;
     let genome = sequence.to_string();
 
-    let coordinates = read_coordinates(&cli.coordinates)?;
+    let rows_to_process: Vec<(usize, usize)> = match cli.row {
+        Some(idx) => vec![read_coordinate_row(&cli.coordinates, idx)?],
+        None => read_coordinates(&cli.coordinates)?,
+    };
 
     let accessibility_path = find_ff_accessibility("ff-accessibility")?;
 
@@ -51,9 +57,9 @@ fn main() -> Result<()> {
 
     writer.write_record(&["start", "end", "accessibilities"])?;
 
-    let total = coordinates.len();
+    let total = rows_to_process.len();
 
-    for (i, (start, end)) in coordinates.iter().enumerate() {
+    for (i, (start, end)) in rows_to_process.iter().enumerate() {
 
         println!("{}/{}", i+1, total);
         let seq = get_sequence(*start, *end, genome.clone())?;
@@ -86,7 +92,7 @@ fn read_coordinates(path: &str) -> Result<Vec<(usize, usize)>> {
     let mut rdr = ReaderBuilder::new()
         .has_headers(true)
         .from_path(path)
-        .with_context(|| format!("failed to open coordinates read_fasta_file"))?;
+        .with_context(|| format!("failed to open coordinates file"))?;
 
     rdr.records()
         .map(|record| {
@@ -103,6 +109,30 @@ fn read_coordinates(path: &str) -> Result<Vec<(usize, usize)>> {
         })
         .collect()
 }
+
+fn read_coordinate_row(path: &str, idx: usize) -> Result<(usize, usize)> {
+    
+    let mut rdr = ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(path)
+        .with_context(|| format!("failed to open coordinates file"))?;
+
+    let record = rdr.records()
+        .nth(idx)
+        .with_context(|| format!("row index {} out of range", idx))?
+        .with_context(|| format!("failed to read coordinate row {}", idx))?;
+    let start: usize = record.get(1)
+        .context("missing starting column!")?
+        .parse()
+        .context("failed to parse start")?;
+    let end: usize = record.get(2)
+        .context("missing end column")?
+        .parse()
+        .context("failed to parse end")?;
+
+    Ok((start, end))
+}
+
 
 fn get_sequence(start: usize, end: usize, genome: String) -> Result<String> {
 
