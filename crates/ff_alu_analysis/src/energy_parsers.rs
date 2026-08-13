@@ -59,7 +59,7 @@ impl EnergyModelArguments {
                     if self.celsius != 37.0 {
                         panic!("Cannot change temperature for fitted parameters!");
                     }
-                    ViennaRNA::from_andrunescu_params(&RNA_ANDRONESCU_2007)
+                    ViennaRNA::from_andronescu_params(&RNA_ANDRONESCU_2007)
                 },
             }
         } else if let Some(dna_choice) = &self.dna {

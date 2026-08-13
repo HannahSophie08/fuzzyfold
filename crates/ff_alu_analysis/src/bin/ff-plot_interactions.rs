@@ -32,9 +32,6 @@ pub struct Cli {
 
     #[arg(long, value_name = "NAME", num_args = 1..)]
     region_names: Vec<String>,
-
-    #[arg(long, value_name = "TIME", num_args = 1..)]
-    region_ends: Vec<f64>,
 }
 
 
@@ -42,21 +39,26 @@ pub struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let (times, categories, t_split, t_end) = read_csv(&cli.input)?;
+    let (times, categories, t_split, t_ext, t_end, regions, _num_sims) = read_csv(&cli.input)?;
 
-    let all_categories_path = cli.output.with_extension("_all_categories.svg");
-    let between_categories_path = cli.output.with_extension("between_categories.svg");
+    let stem = cli.output.file_stem().unwrap_or_default().to_string_lossy();
+    let dir = cli.output.parent().unwrap_or_else(|| Path::new(""));
 
+    let all_categories_path = dir.join(format!("{}_all_categories.svg", stem));
+    let between_categories_path = dir.join(format!("{}_between_categories.svg", stem));
+    let region_ends: Vec<f64> = regions.iter().map(|(_, j)|*j as f64 * t_ext).collect();
+
+    let all_categories = normalize_all(&categories);
     plot_all_categorie_over_time(
-        &times, &categories, t_split, t_end,
-        &cli.region_names, &cli.region_ends,
+        &times, &all_categories, t_split, t_end,
+        &cli.region_names, &region_ends,
         all_categories_path,
     );
 
-    let between_categories = renormalize_between(&categories);
+    let between_categories = normalize_between(&categories);
     plot_betweens(
         &times, &between_categories, t_split, t_end,
-        &cli.region_names, &cli.region_ends,
+        &cli.region_names, &region_ends,
         between_categories_path,
     );
 
@@ -94,13 +96,16 @@ fn draw_region_ends(
 }
 
 
-fn read_csv(path: &PathBuf) -> Result<(Vec<f64>, Vec<FxHashMap<Category, f64>>, f64, f64)> {
+fn read_csv(path: &PathBuf) -> Result<(Vec<f64>, Vec<FxHashMap<Category, f64>>, f64, f64, f64, Vec<(usize, usize)>, usize,)> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
 
     let mut t_split: Option<f64> = None;
+    let mut t_ext: Option<f64> = None;
     let mut t_end: Option<f64> = None;
+    let mut regions: Option<Vec<(usize, usize)>> = None;
+    let mut num_sims: Option<usize> = None; 
 
     // Parse comment header lines starting with '#'
     loop {
@@ -112,9 +117,23 @@ fn read_csv(path: &PathBuf) -> Result<(Vec<f64>, Vec<FxHashMap<Category, f64>>, 
             if let Some(val) = content.strip_prefix("t_split=") {
                 t_split = Some(val.trim().parse()
                     .map_err(|_| anyhow!("Invalid t_split value: {}", val))?);
+            } else if let Some(val) = content.strip_prefix("t_ext=") {
+                t_ext = Some(val.trim().parse()
+                    .map_err(|_| anyhow!("Invalid t_ext value: {}", val))?);
             } else if let Some(val) = content.strip_prefix("t_end=") {
                 t_end = Some(val.trim().parse()
                     .map_err(|_| anyhow!("Invalid t_end value: {}", val))?);
+            } else if let Some(val) = content.strip_prefix("regions=") {
+                let mut parsed = Vec::new();
+                for piece in val.trim().split(',') {
+                    let (a, b) = piece.split_once('-')
+                        .ok_or_else(|| anyhow!("Invalid region format: {}", piece))?;
+                    parsed.push((a.parse()?, b.parse()?));
+                }
+                regions = Some(parsed);
+            } else if let Some(val) = content.strip_prefix("num_sims=") {
+                num_sims = Some(val.trim().parse()
+                    .map_err(|_| anyhow!("Invalid num_sims value: {}", val))?);
             }
         } else {
             // This is the CSV header line ("time,category,value") — consume and break
@@ -123,7 +142,10 @@ fn read_csv(path: &PathBuf) -> Result<(Vec<f64>, Vec<FxHashMap<Category, f64>>, 
     }
 
     let t_split = t_split.ok_or_else(|| anyhow!("Missing # t_split=... in file header"))?;
+    let t_ext   = t_ext  .ok_or_else(|| anyhow!("Missing # t_ext=...   in file header"))?;
     let t_end   = t_end  .ok_or_else(|| anyhow!("Missing # t_end=...   in file header"))?;
+    let regions   = regions  .ok_or_else(|| anyhow!("Missing # regions=...   in file header"))?;
+    let num_sims   = num_sims  .ok_or_else(|| anyhow!("Missing # num_sims=...   in file header"))?;
     lines.next(); // skip header
 
     let mut rows: Vec<(f64, Category, f64)> = Vec::new();
@@ -147,7 +169,7 @@ fn read_csv(path: &PathBuf) -> Result<(Vec<f64>, Vec<FxHashMap<Category, f64>>, 
         categories.last_mut().unwrap().insert(category, value);
     }
 
-    Ok((times, categories, t_split, t_end))
+    Ok((times, categories, t_split, t_ext, t_end, regions, num_sims))
 }
 
 
@@ -292,10 +314,20 @@ fn plot_all_categorie_over_time(
     root.present().unwrap(); // write the PNG
 }
 
+fn normalize_all(categories: &[FxHashMap<Category, f64>]) -> Vec<FxHashMap<Category, f64>> {
+    categories.iter().map(|map| {
+        let total: f64 = map.values().sum();
 
+        map.iter()
+            .map(|(cat, v)| (
+                cat.clone(),
+                if total > 0.0 { v / total * 100.0 } else { 0.0 }
+            ))
+            .collect()
+    }).collect()
+}
 
-
-fn renormalize_between(categories: &[FxHashMap<Category, f64>]) -> Vec<FxHashMap<Category, f64>> {
+fn normalize_between(categories: &[FxHashMap<Category, f64>]) -> Vec<FxHashMap<Category, f64>> {
     categories.iter().map(|map| {
         let between_sum: f64 = map.iter()
             .filter(|(cat, _)| matches!(cat, Category::Between(_, _)))
@@ -306,7 +338,7 @@ fn renormalize_between(categories: &[FxHashMap<Category, f64>]) -> Vec<FxHashMap
             .filter(|(cat, _)| matches!(cat, Category::Between(_, _)))
             .map(|(cat, v)| (
                 cat.clone(),
-                if between_sum > 0.0 { v / between_sum * 100.0 } else { 0.0 }
+                if between_sum > 0.0 { v / between_sum * 100.0} else { 0.0 }
             ))
             .collect()
     }).collect()

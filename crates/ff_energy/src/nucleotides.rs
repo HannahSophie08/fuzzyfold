@@ -228,8 +228,6 @@ const PAIR_LOOKUP: [[PairTypeRNA; BCOUNT]; BCOUNT] = {
     table[PU as usize][G as usize] = UG;
     table[I as usize][U as usize] = IU;
     table[U as usize][I as usize] = UI;
-    table[I as usize][T as usize] = IU;
-    table[T as usize][I as usize] = UI;
     table[C as usize][I as usize] = CI;
     table[I as usize][C as usize] = IC;
     table

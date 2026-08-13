@@ -199,8 +199,10 @@ impl RateTree {
 
     pub fn select_by_threshold(&self, mut thresh: f64) -> Option<Move> {
         let mut i = 1;
+        let mut rate_sum = 0.0;
         while i < self.entries.len() {
             let node = &self.entries[i];
+            rate_sum = node.rate_sum;
             thresh -= node.rate;
             if thresh <= 0.0 {
                 return Some(node.mv);
@@ -217,7 +219,7 @@ impl RateTree {
                 break;
             }
         }
-        eprintln!("RateTree: roundoff error! This should be extremely rare!");
+        eprintln!("RateTree: roundoff error! This should be extremely rare! Threshold: {}, rate sum: {}", thresh, rate_sum);
         self.entries
             .last()
             .map(|n| n.mv)
