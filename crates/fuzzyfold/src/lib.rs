@@ -35,3 +35,5 @@ pub mod energy_parsers;
 /// Exposing the currently supported parameters of fuzzyfold's rate models and simulation parameters.
 pub mod kinetics_parsers;
 
+pub mod category;
+
