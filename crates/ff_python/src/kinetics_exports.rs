@@ -171,7 +171,7 @@ impl Simulator {
         t_log: usize,
         t_sep: Option<f64>,
         num_sims: usize,
-    ) -> PyResult<Vec<Vec<String>>> {
+    ) -> PyResult<Vec<(f64, FxHashMap<String, usize>)>> {
 
        let (sequence, start_pt, times) = parse_inputs(self, sequence, start, t_ext, t_end)?;
 
@@ -231,9 +231,19 @@ impl Simulator {
 
             (0..num_sims).into_par_iter().map(run_one).collect()
        });
+       
+       let results = results.map_err(PyValueError::new_err)?;
 
-       results.map_err(PyValueError::new_err)     
-        
+       let mut counts: Vec<FxHashMap<String, usize>> = (0..output_times.len()).map(|_| FxHashMap::default()).collect();
+       
+       for structures in &results {
+            for (t_idx, structure) in structures.iter().enumerate() {
+                *counts[t_idx].entry(structure.clone()).or_insert(0) += 1;
+            }    
+        }
+
+        Ok(output_times.iter().copied().zip(counts).collect())
+
     }
 
     #[pyo3(signature = (
