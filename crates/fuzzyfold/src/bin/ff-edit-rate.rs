@@ -22,9 +22,6 @@ pub struct Cli {
     #[arg(short, long, value_name = "POSITION", num_args = 1..)]
     positions: Vec<usize>,
 
-    #[arg(short, long, value_name = "FILE")]
-    output: PathBuf,
-
     #[arg(short = '5', long, default_value_t = 1)]
     duplex_5: usize,
 
@@ -91,16 +88,20 @@ fn main() -> Result<()> {
         let adenines = sequence.iter().enumerate()
             .filter(|(_, base)| **base == Base::A)
             .map(|(i, _)| i);
-
-            if regions.is_empty() {
-                adenines.collect()
-            } else {
-                adenines.filter(|&i| regions.iter().any(|&(start, end)| i >= start && i <= end))
-                .collect()
-            }
+            adenines.collect()
     } else {
         zero_indexed_positions
     };
+
+    let sequence = data[0].sequence.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing sequence in input file"))?;
+    let alu_as: Vec<usize> = sequence.iter().enumerate()
+        .filter(|(_, base)| **base == Base::A)
+        .map(|(i, _)| i)
+        .filter(|&i| regions.iter().any(|&(start, end)| i >= start && i <= end))
+        .collect();
+
+    let a_count = positions.len();
 
     if positions.is_empty() {
         bail!("No positions given: use --positions or --all-adenosins");
@@ -109,37 +110,7 @@ fn main() -> Result<()> {
     for file in data.iter_mut() {
         let sequence = file.sequence.as_ref().ok_or_else(|| anyhow::anyhow!("missing sequence in input file"))?;
         file.counts = edit_count(sequence, &file.structures, &positions, cli.duplex_5, cli.duplex_3);
-        if cli.all_adenosins {
-            if regions.is_empty() {
-                file.counts = file.counts.iter().map(|inner| vec![inner.iter().sum()]).collect();
-            } else {
-                file.counts = file.counts.iter().map(|inner| {
-                    let mut region_counts = vec![0usize; regions.len()];
-                    for (i, &count) in inner.iter().enumerate() {
-                        let r = regions.iter().position(|&(start, end)| positions[i] >= start && positions[i] <= end).unwrap(); 
-                        region_counts[r] += count; 
-                    }
-                    region_counts
-                }).collect();
-            }
-        }
     }
-
-    if cli.all_adenosins {
-        if regions.is_empty() {
-            let len_positions = positions.len();
-            positions = Vec::new();
-            positions.push(len_positions -1);
-        } else {
-            positions = Vec::new();
-            for (idx, _region) in regions.iter().enumerate() {
-                positions.push(idx);
-            }
-            println!("regions, positions: {:?}", positions);
-        }
-    }
-
-    let csv_path = cli.output.with_extension("csv");
     
     let mut data_iter = data.into_iter();
     
@@ -149,18 +120,46 @@ fn main() -> Result<()> {
         combined_data = accumulate(combined_data, file)?;
     }
 
+    let mut edited_pos = vec![false; positions.len()];
+
+    for row in combined_data.counts.iter() {
+        for (i, &count) in row.iter().enumerate() {
+            if count > 0 {
+                edited_pos[i] = true; 
+            }
+        }
+    }
+
+    let mut edited_count = 0;
+    let mut alu_count = 0;
+    let mut alu_positions = Vec::new();
+    let mut alu_specific = vec![0; regions.len()];
+
+    for (i, &is_edited) in edited_pos.iter().enumerate() {
+        if is_edited {
+            edited_count += 1;
+            if regions.iter().position(|&(start, end)| positions[i] >= start && positions[i] <= end).is_some() {
+                alu_count += 1;
+                alu_positions.push(positions[i]);
+            } 
+            for (r, &(start, end)) in regions.iter().enumerate() {
+                if positions[i] >= start && positions[i] <= end {
+                    alu_specific[r] += 1;
+                }
+            }
+        } 
+    }
+
+    println!("Total As: {}", a_count);
+    println!("As in Alus: {}", alu_as.len());
+    println!("Edited As: {}", edited_count);
+    println!("Edited As in Alus: {}", alu_count);
+    println!("Edited As in Alu_1: {}", alu_specific[0]);
+    println!("Edited As in Alu_2: {}", alu_specific[1]);
+    println!("Edited As in Alu_3: {}", alu_specific[2]);
+    println!("Edited positions in Alus: {:?}", alu_positions);
     let sequence = combined_data.sequence.unwrap();
    
-    let mut writer = BufWriter::new(File::create(csv_path.clone())?);
-    writeln!(writer, "# sequence={}", sequence)?;
-    writeln!(writer, "# t_ext={}", combined_data.t_ext)?;
-    writeln!(writer, "# t_end={}", combined_data.t_end)?;
-    writeln!(writer, "# t_sep={}", combined_data.t_sep)?;
-    writeln!(writer, "# num_sims={}", combined_data.num_sims)?;
-    writeln!(writer, "# duplex_5={}", cli.duplex_5)?;
-    writeln!(writer, "# duplex_3={}", cli.duplex_3)?;
-    let one_indexed_positions: Vec<usize> = positions.iter().map(|p| p + 1).collect();
-    write_counts(&mut writer, &combined_data.times, &one_indexed_positions, &combined_data.counts)?;
 
     Ok(())
 }
@@ -368,25 +367,4 @@ fn accumulate(data1: FileData, data2: FileData) -> Result<FileData> {
     combined_data.num_sims = data1.num_sims + data2.num_sims;
     
     Ok(combined_data)
-}
-
-
-fn write_counts( 
-    writer: &mut impl Write,
-    times: & [f64],
-    positions: &Vec<usize>,
-    counts: &Vec<Vec<usize>>,
-) -> Result<()> {
-    let header = positions.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",");
-    writeln!(writer, "# positions={}", header)?;
-    write!(writer, "time,")?;
-    writeln!(writer, "{}", header)?;
-    for (t_idx, t) in times.iter().enumerate() {
-        let row = positions.iter().enumerate()
-            .map(|(i, _pos)| counts[t_idx][i].to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-        writeln!(writer, "{},{}", t, row)?;
-    }
-    Ok(())
 }

@@ -169,6 +169,7 @@ where
         .unwrap()
         .progress_chars("#>-"),
     );
+    let done = std::sync::atomic::AtomicU64::new(0);
 
     (0..num_sims)
         .into_par_iter()
@@ -190,6 +191,10 @@ where
                         true
                     },
                 );
+                let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                if n % 10 == 0 || n == num_sims {
+                    eprintln!("progress: {}/{}", n, num_sims);
+                }
 
                 pb.inc(1);
                 timeline

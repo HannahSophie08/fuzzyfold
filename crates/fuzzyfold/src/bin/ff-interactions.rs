@@ -30,9 +30,9 @@ pub struct Cli {
 struct FileData {
     sequence: Option<NucleotideVec>,
     times: Vec<f64>,
-    t_ext: usize,
-    t_end: usize,
-    t_sep: usize,
+    t_ext: f64,
+    t_end: f64,
+    t_sep: f64,
     num_sims: usize,
     structures: Vec<FxHashMap<DotBracketVec, usize>>,
     categories: Vec<FxHashMap<Category, usize>>,
@@ -45,7 +45,9 @@ fn main() -> Result<()> {
     let regions: Vec<(usize, usize)> = cli.regions.iter()
     .map(|r| {
         let (a, b) = r.split_once('-').expect("region must be in format START-END");
-        (a.parse::<usize>().expect("invalid start"), b.parse::<usize>().expect("invalid end"))
+        let start = a.parse::<usize>().expect("invalid start");
+        let end = b.parse::<usize>().expect("invalid end");
+        (start - 1, end - 1)
     })
     .collect();
 
@@ -73,8 +75,21 @@ fn main() -> Result<()> {
     for file in data_iter {
         combined_data = accumulate(combined_data, file)?;
     }
+
+    let sequence = combined_data.sequence.unwrap();
+    let co_time = combined_data.t_ext * (sequence.len() - 1) as f64;
+    let post_time = co_time + combined_data.t_end;
    
     let mut writer = BufWriter::new(File::create(csv_path.clone())?);
+    writeln!(writer, "# t_split={}", co_time)?;
+    writeln!(writer, "# t_ext={:?}", combined_data.t_ext)?;
+    writeln!(writer, "# t_end={}", post_time)?;
+    let regions_str = regions.iter()
+        .map(|(a, b)| format!("{}-{}", a, b))
+        .collect::<Vec<_>>()
+        .join(",");
+    writeln!(writer, "# regions={}", regions_str)?;
+    writeln!(writer, "# num_sims={}", combined_data.num_sims)?;
     write_categories(&mut writer, &combined_data.times, &combined_data.categories)?;
 
     Ok(())
@@ -88,7 +103,8 @@ fn parse_file(path: PathBuf) -> Result<FileData> {
 
     for line in content.lines() {
         if let Some(rest) = line.strip_prefix("# t_ext=") {
-            data.t_ext = rest.parse()?; 
+            let inner = rest.strip_prefix("Some(").and_then(|s| s.strip_suffix(")")).unwrap_or(rest);
+            data.t_ext = inner.parse()?; 
         }
         if let Some(rest) = line.strip_prefix("# t_end=") {
             data.t_end = rest.parse()?;
@@ -232,4 +248,3 @@ fn write_categories(
     }
     Ok(())
 }
-
