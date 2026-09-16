@@ -45,6 +45,18 @@ path = "src/bin/ff-edit.rs"
 name = "ff-interactions"
 path = "src/bin/ff-interactions.rs"
 
+[[bin]]
+name = "ff-subopt"
+path = "src/bin/ff-subopt.rs"
+
+[[bin]]
+name = "ff-edit-rate"
+path = "src/bin/ff-edit-rate.rs"
+
+[[bin]]
+name = "ff-edit-simulations"
+path = "src/bin/ff-edit-simulations.rs"
+
 [dependencies]
 ff_structure.workspace = true
 ff_energy.workspace = true
