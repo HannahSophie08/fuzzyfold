@@ -6,9 +6,8 @@ import matplotlib.pyplot as plt
 
 seq = "AUAUUAGAUAUUAGUCAUAUGACUGACGGAAGUGGAGUUACCACAUGAAGUAUGACUAGGCAUAUUAUCUUAUAUGCCACAAAAA"
 
-ssa = ff.Simulator(k0=1e6, k3ws=1e6)
+ssa = ff.Simulator(k0=1e5, k3ws=1e5)
 
-#results = ssa.simulate_timecourse(seq, None, t_ext=40, t_end=40, num_sims=50)
 
 occupancy = ssa.simulate_macrostates(
     seq, 
@@ -16,7 +15,7 @@ occupancy = ssa.simulate_macrostates(
     t_end=30,
     t_lin=168,
     t_log=1000,
-    num_sims=100,
+    num_sims=1000,
     macrostates=["../../examples/pfl-riboswitch/pfl-IH1.ms", "../../examples/pfl-riboswitch/pfl-IH1_P2.ms", "../../examples/pfl-riboswitch/pfl-P1_P2.ms", "../../examples/pfl-riboswitch/pfl-P1_P2_linker.ms",  "../../examples/pfl-riboswitch/pfl-M1.ms"], 
 )
 
@@ -44,7 +43,7 @@ def plot_occupancy(occupancy, t_split, t_end, title, path):
     t_sim = t_split + t_end 
     x = linlog_x(times, t_split, t_sim)
 
-    macrostates = occupancy[0][1].keys()
+    macrostates = list(occupancy[0][1].keys())
     macrostates.sort(key=lambda m: (m == "Unassigned", m))
 
     for macrostate in macrostates:
@@ -76,4 +75,4 @@ def plot_occupancy(occupancy, t_split, t_end, title, path):
 
 
 t_sep = (len(seq) - 1) * 0.02
-plot_occupancy(occupancy, t_sep, 30, "Macro-state occupancy", "../../examples/pfl-riboswitch/pfl_occupancy_1e6_k3ws_100" )
+plot_occupancy(occupancy, t_sep, 30, "Macro-state occupancy", "../../examples/pfl-riboswitch/pfl_occupancy_1e5_k3ws_1000" )
