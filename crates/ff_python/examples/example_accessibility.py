@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 
 seq = "AUAUUAGAUAUUAGUCAUAUGACUGACGGAAGUGGAGUUACCACAUGAAGUAUGACUAGGCAUAUUAUCUUAUAUGCCACAAAAA"
 
-ssa = ff.Simulator(k0=1e5)
+ssa = ff.Simulator(k0=1e5, k3ws=1e5)
 num_sims = 1000
 structures = ssa.simulate_timecourse(seq, start=None, t_ext=0.02, t_end=0.02, t_lin=84, t_log=1, num_sims= num_sims)
 
@@ -42,7 +42,7 @@ ax.set_xlabel("sequence position")
 ax.set_ylabel('transcript length')
 
 fig.colorbar(im, ax=ax, label='accessibility')
-path = '../../examples/pfl-riboswitch/accessibility_heatmap.png'
+path = '../../examples/pfl-riboswitch/accessibility_heatmap_1e5_k3ws_1000.png'
 fig.savefig(path, bbox_inches='tight', dpi=300);  plt.close(fig);  print(f'Wrote {path}')
 
 

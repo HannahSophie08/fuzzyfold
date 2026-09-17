@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 seq = "AUAUUAGAUAUUAGUCAUAUGACUGACGGAAGUGGAGUUACCACAUGAAGUAUGACUAGGCAUAUUAUCUUAUAUGCCACAAAAA"
 
-ssa = ff.Simulator(k0=1e5)
+ssa = ff.Simulator(k0=1e6, k3ws=1e6)
 
 #results = ssa.simulate_timecourse(seq, None, t_ext=40, t_end=40, num_sims=50)
 
@@ -17,7 +17,7 @@ occupancy = ssa.simulate_macrostates(
     t_lin=168,
     t_log=1000,
     num_sims=100,
-    macrostates=["../../examples/pfl-riboswitch/pfl-IH1.ms", "../../examples/pfl-riboswitch/pfl-IH1_P2.ms", "../../examples/pfl-riboswitch/pfl-P1_P2.ms", "../../examples/pfl-riboswitch/pfl-P1_P2_linker.ms" ], 
+    macrostates=["../../examples/pfl-riboswitch/pfl-IH1.ms", "../../examples/pfl-riboswitch/pfl-IH1_P2.ms", "../../examples/pfl-riboswitch/pfl-P1_P2.ms", "../../examples/pfl-riboswitch/pfl-P1_P2_linker.ms",  "../../examples/pfl-riboswitch/pfl-M1.ms"], 
 )
 
 def linlog_x(t, t_split, t_end, frac=0.7):
@@ -28,7 +28,7 @@ def linlog_x(t, t_split, t_end, frac=0.7):
 
 def linlog_ticks(t_split, t_end, frac=0.7, n_lin=5, n_log=5):
     lin = np.linspace(0, t_split, n_lin + 1)
-    log = np.geomspace(t_split, t_end, n_log + 1)[1:]  # geometric spacing, skip t_split
+    log = np.geomspace(t_split, t_end, n_log + 1)[1:]
     ticks_t = np.concatenate([lin, log])
     ticks_x = linlog_x(ticks_t, t_split, t_end, frac)
     labels   = [f'{t:.3g}' for t in ticks_t]
@@ -44,7 +44,8 @@ def plot_occupancy(occupancy, t_split, t_end, title, path):
     t_sim = t_split + t_end 
     x = linlog_x(times, t_split, t_sim)
 
-    macrostates = occupancy[0][1].keys()   # macrostate names, same keys at every timepoint
+    macrostates = occupancy[0][1].keys()
+    macrostates.sort(key=lambda m: (m == "Unassigned", m))
 
     for macrostate in macrostates:
         y = [fractions[macrostate] for _, fractions in occupancy]
@@ -62,18 +63,17 @@ def plot_occupancy(occupancy, t_split, t_end, title, path):
     for (x0, x1), lbl in [((0.0, 0.7), 'linear time [s]'), ((0.7, 1.0), 'logarithmic time [s]')]:
         mid = (x0 + x1) / 2
         kw = dict(transform=ax.transAxes, color='k', lw=1, clip_on=False)
-        ax.plot([x0, x1], [-0.12, -0.12], **kw)          # horizontal bar
-        ax.plot([x0, x0], [-0.12, -0.09], **kw)           # left serif
-        ax.plot([x1, x1], [-0.12, -0.09], **kw)           # right serif
+        ax.plot([x0, x1], [-0.12, -0.12], **kw)     
+        ax.plot([x0, x0], [-0.12, -0.09], **kw)           
+        ax.plot([x1, x1], [-0.12, -0.09], **kw)         
         ax.text(mid, -0.16, lbl, ha='center', va='top',
                 transform=ax.transAxes, fontsize=10)
 
-    # Subtle marker at the linear/log boundary
     ax.axvline(0.7, color='k', alpha=0.5, lw=1)
 
     ax.legend(fontsize=9, framealpha=0.85)
     fig.savefig(path, bbox_inches='tight', dpi=300);  plt.close(fig);  print(f'Wrote {path}')
 
 
-t_split = (len(seq) - 1) * 0.02
-plot_occupancy(occupancy, t_split, 30, "Macro-state occupancy", "../../examples/pfl-riboswitch/pfl_occupancy" )
+t_sep = (len(seq) - 1) * 0.02
+plot_occupancy(occupancy, t_sep, 30, "Macro-state occupancy", "../../examples/pfl-riboswitch/pfl_occupancy_1e6_k3ws_100" )
