@@ -189,7 +189,18 @@ where
                 let mut current_sim_times = sim_times.to_vec();
                 let mut t_idx = 0usize;
                 let mut t_offset = 0.0;
+                let mut editable_since: FxHashMap<usize, usize> = FxHashMap::default();
                 let l0 = sequence.len() - sim_times.len() + 1;
+                let acc_times: Vec<f64> = {
+                    let mut t = 0.0;
+                    let mut v = Vec::with_capacity(sim_times.len() + 1);
+                    v.push(0.0);
+                    for &s in sim_times {
+                        t += s;
+                        v.push(t);
+                    }
+                    v
+                };
 
                 loop {
                     let mut simulator = SSA::from((current_moves.clone(), rmodel.clone()));
@@ -201,12 +212,12 @@ where
                             let total_t = t + t_offset;
                             while t_idx < times.len() && total_t + tinc >= times[t_idx] {
                                 timeline.push(w.current_structure());
-                                let (edited, edited_sequence) = edit_or_move_on(&current_sequence, &w.current_structure());
+                                t_idx += 1;
+                                let (edited, edited_sequence) = edit_or_move_on(&current_sequence, &w.current_structure(), &mut editable_since);
                                 if edited {
-                                    edit_info = Some((w.current_structure(), edited_sequence, t));
+                                    edit_info = Some((w.current_structure(), edited_sequence, total_t));
                                     return false;
                                 }
-                                t_idx += 1;
 
                             }
                             true
@@ -220,8 +231,9 @@ where
                             t_offset = t;
                             current_moves = LoopNeighbors::try_from((current_sequence.clone(), &pairings, emodel.clone(), shift_policy)).expect("failed to construct AddDelMoves");
                             let used = transcript_len - l0;
-                            if sim_times[used] < t {
-                                let remaining_time = sim_times[used] - t;
+                            let elapsed_in_step = t - acc_times[used];
+                            let remaining_time = sim_times[used] - elapsed_in_step;
+                            if remaining_time > 0.0 {
                                 let mut new_sim_times = Vec::with_capacity(1 + sim_times.len() - used - 1);
                                 new_sim_times.push(remaining_time);
                                 new_sim_times.extend_from_slice(&sim_times[used + 1..]);
@@ -253,15 +265,16 @@ fn random_choice (probability: f64) -> bool {
     return false;
 }
 
-fn edit_or_move_on (sequence: &NucleotideVec, structure: &DotBracketVec) -> (bool, NucleotideVec) {
+fn edit_or_move_on (sequence: &NucleotideVec, structure: &DotBracketVec, editable_since: &mut FxHashMap<usize, usize>) -> (bool, NucleotideVec) {
 
-    let (adenosines, editing) = editing(sequence, structure);
+    let (adenosines, edit) = editing(sequence, structure, editable_since);
+
     let mut edited_sequence = sequence.clone();
     let mut bases: Vec<Base> = sequence.iter().copied().collect();
     let mut edited = false;
 
     for (i, a) in adenosines.iter().enumerate() {
-        if editing[i] {
+        if edit[i] {
             bases[*a] = Base::I;
             edited_sequence = NucleotideVec::from(ff_energy::NucleotideVec(bases.clone())); 
             println!("Edited position {} at transcript length {}", a, structure.len());
@@ -272,9 +285,9 @@ fn edit_or_move_on (sequence: &NucleotideVec, structure: &DotBracketVec) -> (boo
     return (edited, edited_sequence)
 }
 
-fn editing (sequence: &NucleotideVec, structure: &DotBracketVec) -> (Vec<usize>, Vec<bool>) {
+fn editing (sequence: &NucleotideVec, structure: &DotBracketVec, editable_since: &mut FxHashMap<usize, usize>) -> (Vec<usize>, Vec<bool>) {
 
-    let adenosines = sequence.iter().enumerate()
+    let adenosines: Vec<usize> = sequence.iter().enumerate()
             .filter(|(_, base)| **base == Base::A)
             .map(|(i, _)| i)
             .collect();
@@ -284,19 +297,55 @@ fn editing (sequence: &NucleotideVec, structure: &DotBracketVec) -> (Vec<usize>,
     let edit_58 = position_check(sequence, structure, &adenosines, 5, 8);
 
     let mut edited = Vec::new();
-    for (i, _a) in adenosines.iter().enumerate() {
-        let mut choice = false;
-        if edit_58[i] {
-            choice = random_choice(0.3);
-        } else if edit_36[i] {
-            choice = random_choice(0.2);
-        }  else if edit_11[i] {
-            choice = random_choice(0.1);
+
+    let is_editable: Vec<bool> = (0..adenosines.len())
+        .map(|i| edit_11[i] || edit_36[i] || edit_58[i])
+        .collect();
+
+    let mut editable_by_position = vec![false; sequence.len()];
+
+    for (i, &a) in adenosines.iter().enumerate() {
+        if is_editable[i] {
+            editable_by_position[a] = true;
         }
+    }
+
+    editable_since.retain(|pos, _| editable_by_position[*pos]);
+
+    for (i, a) in adenosines.iter().enumerate() {
+        let mut choice = false;
+        if is_editable[i] {
+            if let Some(&count) = editable_since.get(a) {
+                if edit_58[i] {
+                    let prob = (0.3 + (count as f64 * 0.01)).min(1.0);
+                    choice = random_choice(prob);
+                } else if edit_36[i] {
+                    let prob = (0.2 + (count as f64 * 0.01)).min(1.0);
+                    choice = random_choice(prob);
+                }  else if edit_11[i] {
+                    let prob = (0.1 + (count as f64 * 0.01)).min(1.0);
+                    choice = random_choice(prob);
+                }
+            } else {
+                if edit_58[i] {
+                    choice = random_choice(0.3);
+                } else if edit_36[i] {
+                    choice = random_choice(0.2);
+                }  else if edit_11[i] {
+                    choice = random_choice(0.1);
+                }
+            }
+            if !choice {
+                *editable_since.entry(adenosines[i]).or_insert(0) += 1;
+            }
+        }
+
         edited.push(choice);
     }
     return (adenosines, edited)
 }
+
+
 // checks whether position is unpaired and across from a 'C', and whether the 
 // 5' and 3' neighbors are paired
 fn position_check (sequence: &NucleotideVec, structure: &DotBracketVec, positions: &Vec<usize>, duplex_5: usize, duplex_3: usize) -> Vec<bool> {
