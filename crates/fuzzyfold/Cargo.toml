@@ -57,6 +57,34 @@ path = "src/bin/ff-edit-rate.rs"
 name = "ff-edit-simulations"
 path = "src/bin/ff-edit-simulations.rs"
 
+[[bin]]
+name = "ff-editing-frequency"
+path = "src/bin/ff-editing-frequency.rs"
+
+[[bin]]
+name = "ff-subopt_edit_rate"
+path = "src/bin/ff-subopt-edit_rate.rs"
+
+[[bin]]
+name = "ff-subopt_editing-frequency"
+path = "src/bin/ff-subopt-editing-frequency.rs"
+
+[[bin]]
+name = "ff-competition"
+path = "src/bin/ff-competition.rs"
+
+[[bin]]
+name = "ff-ratio"
+path = "src/bin/ff-ratio.rs"
+
+[[bin]]
+name = "ff-subopt-competition"
+path = "src/bin/ff-subopt-competition.rs"
+
+[[bin]]
+name = "ff-subopt-ratio"
+path = "src/bin/ff-subopt-ratio.rs"
+
 [dependencies]
 ff_structure.workspace = true
 ff_energy.workspace = true

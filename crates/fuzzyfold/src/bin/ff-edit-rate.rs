@@ -246,7 +246,7 @@ fn gets_edited (sequence: &NucleotideVec, structure: &DotBracketVec, positions: 
             continue;
         }
             
-        if structure[*position] != DotBracket::Unpaired {
+        if structure[*position] == DotBracket::Unpaired {
             result.push(false);
             continue;
         }
@@ -302,7 +302,7 @@ fn gets_edited (sequence: &NucleotideVec, structure: &DotBracketVec, positions: 
         let duplex_len = duplex_5 + duplex_3;
 
         if outer_partner[duplex_5 -1] > inner_partner[duplex_3 - 1] {
-            if outer_partner[duplex_5 -1] - inner_partner[duplex_3 - 1] == duplex_len && sequence[outer_partner[0] - 1] == Base::C {
+            if outer_partner[duplex_5 -1] - inner_partner[duplex_3 - 1] == duplex_len && sequence[outer_partner[0] - 1] == Base::U {
                 result.push(true);
                 continue;
             }

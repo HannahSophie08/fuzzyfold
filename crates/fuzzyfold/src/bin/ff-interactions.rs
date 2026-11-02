@@ -16,7 +16,7 @@ use fuzzyfold::category::Category;
 #[command(version, about = "Stochastically simulated nucleic acid ensembles over time.")]
 pub struct Cli {
     /// Input file (FASTA-like), or "-" for stdin
-    #[arg(value_name = "INPUT", default_value = "-")]
+    #[arg(value_name = "INPUT")]
     input: Vec<PathBuf>,
 
     #[arg(long, value_name = "START-END", num_args = 1..)]
@@ -91,6 +91,7 @@ fn main() -> Result<()> {
     writeln!(writer, "# regions={}", regions_str)?;
     writeln!(writer, "# num_sims={}", combined_data.num_sims)?;
     write_categories(&mut writer, &combined_data.times, &combined_data.categories)?;
+    writer.flush()?;
 
     Ok(())
 }

@@ -99,25 +99,25 @@ fn main() -> Result<()> {
                 let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel.clone(), NoShift))
                     .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
                     eprintln!("[moveset] selected=NoShift");
-                run_timecourse(moves, rmodel, emodel, &sequence, &sim_times, cli.num_sims as u64, &times, NoShift).collect()
+                run_timecourse(moves, rmodel, emodel, &sequence, &sim_times, cli.num_sims as u64, &times, NoShift)
             },
             (true, false) => {
                 let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel.clone(), ThreeWayOnly))
                     .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
                      eprintln!("[moveset] selected=ThreeWayOnly");
-                run_timecourse(moves, rmodel, emodel, &sequence, &sim_times, cli.num_sims as u64, &times, ThreeWayOnly).collect()
+                run_timecourse(moves, rmodel, emodel, &sequence, &sim_times, cli.num_sims as u64, &times, ThreeWayOnly)
             },
             (false, true) => {
                 let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel.clone(), FourWayOnly))
                     .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
                      eprintln!("[moveset] selected=FourWayOnly");
-                run_timecourse(moves, rmodel, emodel, &sequence, &sim_times, cli.num_sims as u64, &times, FourWayOnly).collect()
+                run_timecourse(moves, rmodel, emodel, &sequence, &sim_times, cli.num_sims as u64, &times, FourWayOnly)
             },
             (true, true) => {
                 let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel.clone(), ThreeAndFour))
                     .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
                      eprintln!("[moveset] selected=ThreeAndFour");
-                run_timecourse(moves, rmodel, emodel, &sequence, &sim_times, cli.num_sims as u64, &times, ThreeAndFour).collect()
+                run_timecourse(moves, rmodel, emodel, &sequence, &sim_times, cli.num_sims as u64, &times, ThreeAndFour)
             },
         };
 
@@ -162,7 +162,7 @@ fn run_timecourse<K, E, S>(
     num_sims: u64,
     times: &[f64],
     shift_policy: S,
-) -> impl ParallelIterator<Item = Vec<DotBracketVec>>
+) -> Vec<Vec<DotBracketVec>>
 where
     K: RateModel + Clone + Send + Sync,
     E: EnergyModel + Send + Sync + 'static,
@@ -176,13 +176,12 @@ where
         .unwrap()
         .progress_chars("#>-"),
     );
-    let done = std::sync::atomic::AtomicU64::new(0);
 
-    (0..num_sims)
+    let timelines = (0..num_sims)
         .into_par_iter()
         .map_init(
-            move || pb.clone(), // each thread gets a clone
-            move |pb, _| {
+            || pb.clone(),
+            move |pb, sim| {
                 let mut timeline: Vec<DotBracketVec> = Vec::with_capacity(times.len());
                 let mut current_sequence = sequence.clone();
                 let mut current_moves = moves.clone();
@@ -211,11 +210,12 @@ where
                         |t, tinc, _, w| {
                             let total_t = t + t_offset;
                             while t_idx < times.len() && total_t + tinc >= times[t_idx] {
+                                let t_out = times[t_idx]; 
                                 timeline.push(w.current_structure());
                                 t_idx += 1;
-                                let (edited, edited_sequence) = edit_or_move_on(&current_sequence, &w.current_structure(), &mut editable_since);
+                                let (edited, edited_sequence) = edit_or_move_on(&current_sequence, &w.current_structure(), &mut editable_since, sim);
                                 if edited {
-                                    edit_info = Some((w.current_structure(), edited_sequence, total_t));
+                                    edit_info = Some((w.current_structure(), edited_sequence, t_out));
                                     return false;
                                 }
 
@@ -230,32 +230,27 @@ where
                             current_sequence = new_sequence;
                             t_offset = t;
                             current_moves = LoopNeighbors::try_from((current_sequence.clone(), &pairings, emodel.clone(), shift_policy)).expect("failed to construct AddDelMoves");
+                            println!("sequence after edit: {}", current_sequence);
                             let used = transcript_len - l0;
                             let elapsed_in_step = t - acc_times[used];
-                            let remaining_time = sim_times[used] - elapsed_in_step;
-                            if remaining_time > 0.0 {
-                                let mut new_sim_times = Vec::with_capacity(1 + sim_times.len() - used - 1);
-                                new_sim_times.push(remaining_time);
-                                new_sim_times.extend_from_slice(&sim_times[used + 1..]);
-                                current_sim_times = new_sim_times;
-                            } else {
-                                current_sim_times = sim_times[used..].to_vec();
-                            }
+                            let remaining_time = (sim_times[used] - elapsed_in_step).max(0.0);
+                            let mut new_sim_times = Vec::with_capacity(1 + sim_times.len() - used - 1);
+                            new_sim_times.push(remaining_time);
+                            new_sim_times.extend_from_slice(&sim_times[used + 1..]);
+                            current_sim_times = new_sim_times;
                             continue;
                         },
                         None => break,
                     };
                 }
                 
-                let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                if n % 10 == 0 || n == num_sims {
-                    eprintln!("progress: {}/{}", n, num_sims);
-                }
-
                 pb.inc(1);
                 timeline
-            },
-        )
+            })
+            .collect();
+        
+        pb.finish();
+        timelines
 }
 
 fn random_choice (probability: f64) -> bool {
@@ -265,22 +260,21 @@ fn random_choice (probability: f64) -> bool {
     return false;
 }
 
-fn edit_or_move_on (sequence: &NucleotideVec, structure: &DotBracketVec, editable_since: &mut FxHashMap<usize, usize>) -> (bool, NucleotideVec) {
+fn edit_or_move_on (sequence: &NucleotideVec, structure: &DotBracketVec, editable_since: &mut FxHashMap<usize, usize>, num_sim: u64) -> (bool, NucleotideVec) {
 
     let (adenosines, edit) = editing(sequence, structure, editable_since);
 
-    let mut edited_sequence = sequence.clone();
     let mut bases: Vec<Base> = sequence.iter().copied().collect();
     let mut edited = false;
 
     for (i, a) in adenosines.iter().enumerate() {
         if edit[i] {
             bases[*a] = Base::I;
-            edited_sequence = NucleotideVec::from(ff_energy::NucleotideVec(bases.clone())); 
-            println!("Edited position {} at transcript length {}", a, structure.len());
+            println!("Simulation: {}: Edited position {} at transcript length {}", num_sim, a, structure.len());
             edited = true;
         }
     }
+    let edited_sequence = NucleotideVec::from(ff_energy::NucleotideVec(bases.clone())); 
 
     return (edited, edited_sequence)
 }
@@ -292,9 +286,11 @@ fn editing (sequence: &NucleotideVec, structure: &DotBracketVec, editable_since:
             .map(|(i, _)| i)
             .collect();
 
-    let edit_11 = position_check(sequence, structure, &adenosines, 1, 1);
-    let edit_36 = position_check(sequence, structure, &adenosines, 3, 6);
-    let edit_58 = position_check(sequence, structure, &adenosines, 5, 8);
+    let pt = PairTable::try_from(structure).unwrap();
+
+    let edit_11 = position_check(sequence, structure, &pt, &adenosines, 1, 1);
+    let edit_36 = position_check(sequence, structure, &pt, &adenosines, 3, 6);
+    let edit_58 = position_check(sequence, structure, &pt, &adenosines, 5, 8);
 
     let mut edited = Vec::new();
 
@@ -317,22 +313,22 @@ fn editing (sequence: &NucleotideVec, structure: &DotBracketVec, editable_since:
         if is_editable[i] {
             if let Some(&count) = editable_since.get(a) {
                 if edit_58[i] {
-                    let prob = (0.3 + (count as f64 * 0.01)).min(1.0);
+                    let prob = (0.15 + (count as f64 * 0.01)).min(1.0);
                     choice = random_choice(prob);
                 } else if edit_36[i] {
-                    let prob = (0.2 + (count as f64 * 0.01)).min(1.0);
+                    let prob = (0.1 + (count as f64 * 0.01)).min(1.0);
                     choice = random_choice(prob);
                 }  else if edit_11[i] {
-                    let prob = (0.1 + (count as f64 * 0.01)).min(1.0);
+                    let prob = (0.05 + (count as f64 * 0.01)).min(1.0);
                     choice = random_choice(prob);
                 }
             } else {
                 if edit_58[i] {
-                    choice = random_choice(0.3);
+                    choice = random_choice(0.15);
                 } else if edit_36[i] {
-                    choice = random_choice(0.2);
-                }  else if edit_11[i] {
                     choice = random_choice(0.1);
+                }  else if edit_11[i] {
+                    choice = random_choice(0.05);
                 }
             }
             if !choice {
@@ -348,10 +344,9 @@ fn editing (sequence: &NucleotideVec, structure: &DotBracketVec, editable_since:
 
 // checks whether position is unpaired and across from a 'C', and whether the 
 // 5' and 3' neighbors are paired
-fn position_check (sequence: &NucleotideVec, structure: &DotBracketVec, positions: &Vec<usize>, duplex_5: usize, duplex_3: usize) -> Vec<bool> {
+fn position_check (sequence: &NucleotideVec, structure: &DotBracketVec, pt: &PairTable, positions: &Vec<usize>, duplex_5: usize, duplex_3: usize) -> Vec<bool> {
 
     let mut result = Vec::new();
-    let pt = PairTable::try_from(structure).unwrap();
 
     'outer_pos: for position in positions.iter() {
 
