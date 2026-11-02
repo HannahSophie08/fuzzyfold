@@ -1,4 +1,3 @@
-use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::io::BufWriter;
@@ -13,27 +12,25 @@ use clap::Parser;
 use anyhow::Result;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
-use serde_json::to_string_pretty;
 
-use ff_structure::PairTable;
-use ff_energy::EnergyModel;
-use ff_kinetics::RateModel;
-use ff_kinetics::Walker;
-use ff_kinetics::LoopNeighbors;
-use ff_kinetics::shift_policy::*;
-use ff_kinetics::SSA;
-use ff_kinetics::timeline::Timeline;
-use ff_kinetics::timeline_plotting::plot_occupancy_over_time;
-use ff_kinetics::MacrostateRegistry;
+use fuzzyfold::structure::MultiPairTable;
+use fuzzyfold::energy::EnergyModel;
+use fuzzyfold::kinetics::RateModel;
+use fuzzyfold::kinetics::Elongation;
+use fuzzyfold::kinetics::LoopNeighbors;
+use fuzzyfold::kinetics::SSA;
+use fuzzyfold::kinetics::timecourse::Timecourse;
+use fuzzyfold::kinetics::MacrostateRegistry;
 
 use fuzzyfold::input_parsers::read_cotr_input;
 use fuzzyfold::input_parsers::read_eval_input;
 use fuzzyfold::energy_parsers::EnergyModelArguments;
 use fuzzyfold::kinetics_parsers::RateModelArguments;
-use fuzzyfold::kinetics_parsers::TimelineParameters;
+use fuzzyfold::kinetics_parsers::TimeArguments;
+use fuzzyfold::kinetics::OutputTimes;
 
 #[derive(Parser)]
-#[command(version, about = "Stochastically simulated nucleic acid ensembles over time.")]
+#[command(version, about = "The macrostate occupancies of many trajectories (.tln, .nxy, .svg).", after_help = fuzzyfold::CITATION)]
 pub struct Cli {
     /// Input file (FASTA-like), or "-" for stdin
     #[arg(value_name = "INPUT", default_value = "-")]
@@ -52,7 +49,7 @@ pub struct Cli {
     title: Option<String>,
 
     #[command(flatten, next_help_heading = "Simulation parameters")]
-    simulation: TimelineParameters,
+    simulation: TimeArguments,
 
     #[command(flatten, next_help_heading = "Energy model parameters")]
     energy: EnergyModelArguments,
@@ -62,8 +59,9 @@ pub struct Cli {
 }
 
 fn main() -> Result<()> {
-    let mut cli = Cli::parse();
-    let emodel = Arc::new(cli.energy.build_model());
+    fuzzyfold::restore_sigpipe();
+    let cli = Cli::parse();
+    let emodel = Arc::new(cli.energy.build_model()?);
     let rmodel = cli.kinetics.build_model(emodel.temperature());
 
     let is_rna = cli.energy.dna.is_none();
@@ -76,10 +74,9 @@ fn main() -> Result<()> {
                 Err(e) => return Err(anyhow::anyhow!("{e} (or use --t-ext?)")),
             }
         };
+    cli.energy.warn_circular(&sequence);
     let num_ext = sequence.len() - structure.len();
-    cli.simulation.validate(cli.kinetics.k0, num_ext)?;
-    let t_sep = cli.simulation.t_sep.expect("t-sep must exist after validation!");
-    let pairings = PairTable::try_from(&structure)?;
+    let pairings = MultiPairTable::try_from(&structure)?;
 
     if let Some(h) = header {
         println!("{}", h.yellow());
@@ -89,17 +86,9 @@ fn main() -> Result<()> {
     println!("Output after {} simulations: \n - {:?}\n - {:?}\n - {:?}",
         cli.num_sims, cli.kinetics, cli.simulation, cli.energy);
 
-    let times = cli.simulation.get_output_times(num_ext)?;
-
-    let (sim_times, t_fin) = if num_ext > 0 {
-        let t_ext = cli.simulation.t_ext.unwrap();
-        let t_end = cli.simulation.t_end;
-        let mut a = vec![t_ext; num_ext];
-        a.push(t_end);
-        (a, t_ext * (num_ext as f64) + t_end)
-    } else { 
-        (vec![cli.simulation.t_end], cli.simulation.t_end)
-    };
+    let output = cli.simulation.output_times(num_ext)?;
+    let schedule = cli.simulation.schedule(num_ext, &output)?;
+    let times = output.times();
                                                                             //
     let mut macrostates = MacrostateRegistry::from((sequence.clone(), emodel.clone()));
     macrostates.insert_files(&cli.macrostates, cli.simulation.t_ext.is_some())?;
@@ -122,67 +111,38 @@ fn main() -> Result<()> {
             m.len(),
             m.ensemble_energy().unwrap());
     }
-    let shared_macrostates = Arc::new(macrostates);
 
     // Output paths 
     let tln_path = cli.output.with_extension("tln");
     let svg_path = cli.output.with_extension("svg");
     let nxy_path = cli.output.with_extension("nxy");
 
-    // If timeline.json exists, reload instead of starting empty
+    // If the .tln file exists, add to it instead of starting empty
     let mut master = 
         if Path::new(&tln_path).exists() {
-            println!("Loading existing timeline from: {}", tln_path.display());
-            Timeline::from_file(&tln_path, &times, Arc::clone(&shared_macrostates))?
+            println!("Loading existing time course from: {}", tln_path.display());
+            Timecourse::read_tln(&tln_path, times, &macrostates)?
         } else {
-            println!("A new timeline file will be created: {}", tln_path.display());
-            Timeline::new(&times, Arc::clone(&shared_macrostates))
+            println!("A new time course file will be created: {}", tln_path.display());
+            Timecourse::new(times, macrostates.len())
         };
 
-    let timelines: Vec<_> =
-        match (rmodel.k3ws().is_some(), rmodel.k4ws().is_some()) {
-            (false, false) => {
-                let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, NoShift))
-                    .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_timecourse(moves, rmodel, &sim_times, cli.num_sims as u64,
-                    Arc::clone(&shared_macrostates), &times).collect()
-            },
-            (true, false) => {
-                let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, ThreeWayOnly))
-                    .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_timecourse(moves, rmodel, &sim_times, cli.num_sims as u64,
-                    Arc::clone(&shared_macrostates), &times).collect()
-            },
-            (false, true) => {
-                let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, FourWayOnly))
-                    .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_timecourse(moves, rmodel, &sim_times, cli.num_sims as u64,
-                    Arc::clone(&shared_macrostates), &times).collect()
-            },
-            (true, true) => {
-                let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, ThreeAndFour))
-                    .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                run_timecourse(moves, rmodel, &sim_times, cli.num_sims as u64,
-                    Arc::clone(&shared_macrostates), &times).collect()
-            },
-        };
-
-    for timeline in timelines {
-        master.merge(timeline);
-    }
+    let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, rmodel.move_types()))
+        .map_err(|e| anyhow::anyhow!("failed to build the move set: {e}"))?;
+    master.merge(&run_timecourse(moves, rmodel, &schedule, cli.num_sims as u64,
+        &macrostates, &output));
 
     println!("{}", "Finished simulations!".red());
 
     // save / print / plot.
     let mut writer = BufWriter::new(File::create(nxy_path.clone())?);
-    write!(writer, "{}", master)?;
+    master.write_nxy(&mut writer, &macrostates)?;
+    writer.flush()?;
     println!("Wrote nxy file: {}", format!("{}",nxy_path.display()).green());    
-    let serial = master.to_serializable();
-    let json = to_string_pretty(&serial).unwrap();
-    fs::write(tln_path.clone(), json).unwrap();
+    master.write_tln(&tln_path, &macrostates)?;
     println!("Wrote tln file: {}", tln_path.display());
 
-    let numsim = master.points[0].counter;
+    let numsim = master.num_trajectories(0);
     let title = cli.title.unwrap_or({
         format!("ff-timecourse ({} simulations)", 
         {
@@ -201,7 +161,9 @@ fn main() -> Result<()> {
             }
         })
     });
-    plot_occupancy_over_time(&master, svg_path.clone(), &title, t_sep, t_fin);
+    let t_sep = output.t_sep().expect("lin_log output times");
+    master.plot_svg(&svg_path, &macrostates, &title, t_sep, output.end())
+        .map_err(anyhow::Error::from_boxed)?;
     println!("Wrote svg file: {}", svg_path.display());
 
     Ok(())
@@ -211,16 +173,15 @@ fn main() -> Result<()> {
 fn run_timecourse<W, K, E>(
     moves: W,
     rmodel: K,
-    sim_times: &[f64],
+    schedule: &[f64],
     num_sims: u64,
-    registry: Arc<MacrostateRegistry<E>>,
-    times: &[f64],
-) -> impl ParallelIterator<Item = Timeline<E>>
+    registry: &MacrostateRegistry<E>,
+    output: &OutputTimes,
+) -> Timecourse
 where
-    W: Walker + Clone + Send + Sync,
+    W: Elongation + Clone + Send + Sync,
     K: RateModel + Clone,
     E: EnergyModel,
-    SSA<W, K>: From<(W, K)>,
 {
     let pb = ProgressBar::new(num_sims);
     pb.set_style(
@@ -230,33 +191,19 @@ where
         .progress_chars("#>-"),
     );
 
+    let empty = || Timecourse::new(output.times(), registry.len());
     (0..num_sims)
         .into_par_iter()
         .map_init(
             move || pb.clone(), // each thread gets a clone
             move |pb, _| {
-                let registry = Arc::clone(&registry);
-                let mut timeline = Timeline::new(times, registry);
-
                 let mut simulator = SSA::from((moves.clone(), rmodel.clone()));
-                let mut t_idx = 0;
-                simulator.co_simulate(
-                    &mut rng(),
-                    sim_times,
-                    |t, tinc, _, w| {
-                        while t_idx < times.len() && t + tinc >= times[t_idx] {
-                            let structure = w.current_structure();
-                            timeline.assign_structure(t_idx, &structure);
-                            t_idx += 1;
-                        }
-                        true
-                    },
-                );
-
+                let trajectory = simulator.sample(&mut rng(), schedule, output,
+                    |w| registry.classify(w.current_sequence(), &w.current_structure()));
                 pb.inc(1);
-                timeline
+                trajectory
             },
         )
+        .fold(empty, |mut tc, trajectory| { tc.add_trajectory(&trajectory); tc })
+        .reduce(empty, |mut a, b| { a.merge(&b); a })
 }
-
-

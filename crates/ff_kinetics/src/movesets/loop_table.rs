@@ -1,16 +1,21 @@
 use std::fmt;
 use std::sync::Arc;
-use nohash_hasher::IntMap;
 
-use ff_structure::NAIDX;
 use ff_structure::DotBracket;
 use ff_structure::DotBracketVec;
+use ff_structure::MultiPairTable;
+use ff_energy::Base;
 use ff_energy::EnergyModel;
+use ff_energy::Gap;
 use ff_energy::NucleotideVec;
-use ff_energy::LoopDecomposition;
-use ff_energy::NearestNeighborLoop;
+use ff_energy::NestedLoop;
+use ff_energy::Ring;
+use ff_energy::RingDecomposition;
 
-type LoopEntry = (NearestNeighborLoop, i32);
+use crate::MoveSetError;
+
+
+pub(crate) type LoopEntry = (NestedLoop, i32);
 
 /// Direct storage of the loop decomposition from a structure.
 ///
@@ -25,9 +30,12 @@ pub struct LoopTable<E: EnergyModel> {
     loops: Vec<LoopEntry>,
     stale: Vec<usize>,
     loop_lookup: Vec<usize>,
-    pair_lookup: IntMap<NAIDX, NAIDX>,
+    /// The partner of each paired position, UNPAIRED otherwise.
+    pair_table: Vec<usize>,
     energy: i32,
 }
+
+const UNPAIRED: usize = usize::MAX;
 
 /// Clone creates an independent loop bookkeeping state,
 /// but shares the underlying sequence and energy model.
@@ -39,7 +47,7 @@ impl<E: EnergyModel> Clone for LoopTable<E> {
             loops: self.loops.clone(),
             stale: self.stale.clone(),
             loop_lookup: self.loop_lookup.clone(),
-            pair_lookup: self.pair_lookup.clone(),
+            pair_table: self.pair_table.clone(),
             energy: self.energy,
         }
     }
@@ -50,20 +58,44 @@ impl<E: EnergyModel> LoopTable<E> {
         self.sequence.len()
     }
 
+    /// The sequence, with the edits made so far.
+    pub fn sequence(&self) -> &NucleotideVec {
+        &self.sequence
+    }
+
+    /// Change a base, as an edit; the loops are not updated.
+    pub(crate) fn set_base(&mut self, i: usize, base: Base) {
+        let mut bases = self.sequence.to_vec();
+        bases[i] = base;
+        self.sequence = NucleotideVec::try_from(bases).expect("A base for a base");
+    }
+
     pub fn min_hairpin_size(&self) -> usize {
         self.model.min_hairpin_size()
+    }
+
+    /// True for a circular strand: its last position is the strand wrap.
+    pub fn is_circular(&self) -> bool {
+        self.sequence.last() == Some(&Base::SW)
     }
 
     pub fn can_pair(&self, i: usize, j: usize) -> bool {
         self.model.can_pair(self.sequence[i], self.sequence[j])
     }
 
-    pub fn energy_of_loop(&self, nn_loop: &NearestNeighborLoop) -> i32 {
-        self.model.energy_of_loop(&self.sequence, nn_loop)
+    /// False for a hairpin with fewer unpaired bases than the model allows.
+    /// Index distances rule these out, except for the hairpin through the 
+    /// strand wrap of a circular strand.
+    pub(crate) fn fits(&self, l: &NestedLoop) -> bool {
+        l.hairpin_size().is_none_or(|n| n >= self.min_hairpin_size())
+    }
+
+    pub(crate) fn energy_of_loop(&self, l: &NestedLoop) -> i32 {
+        self.model.energy_of_nested_loop(&self.sequence, l)
             .expect("Broken energy evaluation!")
     }
 
-    pub fn loops_len(&self) -> usize {
+    pub(crate) fn loops_len(&self) -> usize {
         self.loops.len()
     }
 
@@ -71,57 +103,60 @@ impl<E: EnergyModel> LoopTable<E> {
         self.loop_lookup.len()
     }
 
-    pub fn pairs(&self) -> impl Iterator<Item = (&NAIDX, &NAIDX)> + '_ {
-        self.pair_lookup.iter()
+    /// The pairs (i, j), i < j, in the order of i.
+    pub fn pairs(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.pair_table.iter().enumerate().filter(|&(i, &j)| j != UNPAIRED && i < j).map(|(i, &j)| (i, j))
     }
 
-    pub fn delete_pair(&mut self, i: &NAIDX) -> NAIDX {
-        self.pair_lookup.remove(i).expect("Missing pair_list entry.")
+    /// Delete the pair of i, returns its partner.
+    pub(crate) fn delete_pair(&mut self, i: usize) -> usize {
+        let j = self.pair_table[i];
+        assert_ne!(j, UNPAIRED, "Missing pair-table entry.");
+        self.pair_table[i] = UNPAIRED;
+        self.pair_table[j] = UNPAIRED;
+        j
     }
 
-    pub fn insert_pair(&mut self, i: NAIDX, j: NAIDX) {
-        self.pair_lookup.insert(i, j);
+    pub(crate) fn insert_pair(&mut self, i: usize, j: usize) {
+        self.pair_table[i] = j;
+        self.pair_table[j] = i;
     }
 
     pub fn energy(&self) -> i32 {
         self.energy
     }
 
-    pub fn extend_lookup(&mut self, idx: usize) {
+    pub(crate) fn extend_lookup(&mut self, idx: usize) {
         self.loop_lookup.push(idx);
     }
 
-    pub fn update_lookup(&mut self, idx: usize) {
-        let (nn_loop, _) = self.get(idx);
-        for k in nn_loop.inclusive_unpaired_indices() {
-            self.loop_lookup[k] = idx;
+    pub(crate) fn update_lookup(&mut self, idx: usize) {
+        let (l, _) = self.loops.get(idx).expect("Invalid LoopCache index");
+        for s in l.stretches() {
+            self.loop_lookup[s.unpaired.start..=s.ends.1].fill(idx);
         }
     }
 
-    pub fn pair_lookup(&self, idx: &NAIDX) -> NAIDX {
-        self.pair_lookup[idx]
-    }
-
-    pub fn loop_lookup(&self, idx: usize) -> usize {
+    pub(crate) fn loop_lookup(&self, idx: usize) -> usize {
         self.loop_lookup[idx]
     }
 
-    pub fn geti(&self, i: usize) -> &LoopEntry {
+    pub(crate) fn geti(&self, i: usize) -> &LoopEntry {
         &self.loops[self.loop_lookup[i]]
     }
 
-    pub fn get(&self, idx: usize) -> &LoopEntry {
+    pub(crate) fn get(&self, idx: usize) -> &LoopEntry {
         self.loops
             .get(idx)
             .expect("Invalid LoopCache index")
     }
 
-    pub fn mark_stale(&mut self, idx: usize) {
+    pub(crate) fn mark_stale(&mut self, idx: usize) {
         self.energy -= self.loops[idx].1;
         self.stale.push(idx);
     }
 
-    pub fn insert_loopentry(
+    pub(crate) fn insert_loopentry(
         &mut self, 
         index: Option<usize>, 
         entry: LoopEntry,
@@ -146,9 +181,12 @@ impl<E: EnergyModel> fmt::Display for LoopTable<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Convert sequence to string
         let mut dbr = vec!['.'; self.loop_lookup.len()];
-        for (i, j) in &self.pair_lookup {
-            dbr[*i as usize] = '(';
-            dbr[*j as usize] = ')';
+        for (i, j) in self.pairs() {
+            dbr[i] = '(';
+            dbr[j] = ')';
+        }
+        if self.is_circular() {
+            *dbr.last_mut().unwrap() = '^';
         }
         let dbr_str: String = dbr.into_iter().collect();
         write!(f, "{}", dbr_str)
@@ -159,7 +197,7 @@ impl<E: EnergyModel> fmt::Debug for LoopTable<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LoopTable")
             .field("loop_lookup", &self.loop_lookup)
-            .field("pair_lookup", &self.pair_lookup)
+            .field("pair_table", &self.pair_table)
             .finish()
     }
 }
@@ -167,60 +205,147 @@ impl<E: EnergyModel> fmt::Debug for LoopTable<E> {
 impl<E: EnergyModel> From<&LoopTable<E>> for DotBracketVec {
     fn from(ltab: &LoopTable<E>) -> Self {
         // Use the same logic as your Display impl, but avoid allocating a String unnecessarily
-        let mut vec = vec![DotBracket::Unpaired; ltab.lookup_len()];
+        let mut vec = vec![DotBracket::UNPAIRED; ltab.lookup_len()];
         for (i, j) in ltab.pairs() {
-            vec[*i as usize] = DotBracket::Open;
-            vec[*j as usize] = DotBracket::Close;
+            vec[i] = DotBracket::OPEN;
+            vec[j] = DotBracket::CLOSE;
+        }
+        if ltab.is_circular() {
+            *vec.last_mut().unwrap() = DotBracket::STRAND_WRAP;
         }
         DotBracketVec(vec)
     }
 }
 
-impl<T: LoopDecomposition, E: EnergyModel> TryFrom<(NucleotideVec, &T, Arc<E>)> 
-for LoopTable<E> {
-    type Error = String;
+impl<E: EnergyModel> TryFrom<(NucleotideVec, &MultiPairTable, Arc<E>)> for LoopTable<E> {
+    type Error = MoveSetError;
 
-    fn try_from((sequence, pairings, model): (NucleotideVec, &T, Arc<E>)
+    fn try_from((sequence, pairings, model): (NucleotideVec, &MultiPairTable, Arc<E>)
     ) -> Result<Self, Self::Error> {
+        Self::new(sequence, pairings, model)
+    }
+}
+
+impl<E: EnergyModel> LoopTable<E> {
+    /// The table of a structure.
+    pub fn new(sequence: NucleotideVec, pairings: &MultiPairTable, model: Arc<E>
+    ) -> Result<Self, MoveSetError> {
+        // One strand, linear or circular: a circular strand ends with the
+        // strand wrap, the only strand end of the sequence.
+        let circular = sequence.has_circular_strand();
+        let strand_ends = sequence.iter().filter(|b| matches!(b, Base::SB | Base::SW)).count();
+        if circular && (strand_ends > 1 || sequence.last() != Some(&Base::SW)) {
+            return Err(MoveSetError::Unsupported);
+        }
 
         let mut loops = Vec::new();
         let mut loop_lookup = Vec::with_capacity(sequence.len());
-        let mut pair_lookup: IntMap<NAIDX, NAIDX>  = IntMap::default();
+        let mut pair_table = vec![UNPAIRED; sequence.len()];
         let mut energy = 0;
 
         let mut current_len = 0;
-        pairings.for_each_loop(|l| {
+        let mut exterior = 0;
+        // Crossing pairs, also those that close no cycle, make a pseudoknot.
+        let mut unsupported = !pairings.is_nested();
+        let mut error = None;
+        pairings.for_each_ring(|r| {
+            // Kinetics support one strand without pseudoknots: one exterior
+            // loop (through the wrap for a circular strand at full length),
+            // and no joint exterior loops.
+            let Ring::Loop(l) = r else {
+                unsupported = true;
+                return;
+            };
+            match l.gap() {
+                Gap::Open { five, three } if !circular && five <= three => exterior += 1,
+                Gap::Wrap { .. } => exterior += 1,
+                Gap::None => (),
+                _ => unsupported = true,
+            }
+            if unsupported || exterior > 1 || error.is_some() {
+                return;
+            }
             let (_, b) = l.span();
-            let b = b as usize + 1;
+            let b = b + 1;
             if b > current_len {
                 loop_lookup.resize(b, usize::MAX);
                 current_len = b;
             }
 
-            let loop_energy = model.energy_of_loop(&sequence, l)
-                .expect("Broken energy evaluation!");
+            let loop_energy = match model.energy_of_nested_loop(&sequence, l) {
+                Ok(en) => en,
+                Err(e) => {
+                    error = Some(e);
+                    return;
+                }
+            };
             energy += loop_energy;
 
             if let Some((i, j)) = l.closing() {
-                pair_lookup.insert(i as NAIDX, j as NAIDX); 
+                pair_table[i] = j;
+                pair_table[j] = i;
             }
 
             let loop_index = loops.len();
-            for k in l.inclusive_unpaired_indices() {
-                loop_lookup[k] = loop_index;
+            for s in l.stretches() {
+                loop_lookup[s.unpaired.start..=s.ends.1].fill(loop_index);
             }
             loops.push((l.to_owned(), loop_energy));
         });
 
+        if let Some(e) = error {
+            return Err(MoveSetError::Energy(e));
+        }
+        if unsupported || exterior != 1 {
+            return Err(MoveSetError::Unsupported);
+        }
+        if circular {
+            // The strand wrap belongs to no loop.
+            loop_lookup.push(usize::MAX);
+        }
         Ok(LoopTable {
             sequence,
             model,
             loops,
             stale: Vec::new(),
             loop_lookup,
-            pair_lookup,
+            pair_table,
             energy,
         })
     }
 }
 
+/// The loop table of a structure, for tests.
+#[cfg(test)]
+pub(crate) fn table<E: EnergyModel>(model: E, seq: &str, db: &str) -> LoopTable<E> {
+    let sequence = NucleotideVec::try_from(seq).unwrap();
+    let pairs = MultiPairTable::try_from(db).unwrap();
+    LoopTable::try_from((sequence, &pairs, Arc::new(model))).unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ff_energy::Fuzzyfold;
+    use ff_structure::MultiPairTable;
+
+    #[test]
+    fn test_one_strand_without_pseudoknots() {
+        let model = Arc::new(Fuzzyfold::default());
+        let table = |seq: &str, db: &str| LoopTable::try_from((
+            NucleotideVec::try_from(seq).unwrap(),
+            &MultiPairTable::try_from(db).unwrap(),
+            model.clone(),
+        ));
+        assert!(table("GGGAAACCC", "(((...)))").is_ok());
+        assert!(table("GGGAAACCCAAA", "((([[[)))]]]").is_err());
+        assert!(table("GGG+CCC", "(((+)))").is_err());
+        assert!(table("GGG+CCC", "...+...").is_err());
+        // A circular strand alone, at full length.
+        assert!(table("GGGGAAACCCCAAAAAA^", "((((...))))......^").is_ok());
+        assert!(table("GGGGAAACCCCAAAAAA^", "((((...))))......").is_err());
+        assert!(table("GGGGAAACCCCAAAAAA^AA", "((((...))))......^..").is_err());
+        // The hairpin through the wrap has no unpaired bases.
+        assert!(table("GGGAAACCC^", "(((...)))^").is_err());
+    }
+}

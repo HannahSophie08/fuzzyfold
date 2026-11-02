@@ -8,12 +8,13 @@ use clap::ArgGroup;
 use anyhow::Result;
 use env_logger::Builder;
 
-use ff_energy::EnergyModel;
-use ff_kinetics::shift_policy::*;
-use fuzzyfold::structure::PairTable;
+use fuzzyfold::energy::EnergyModel;
+use fuzzyfold::kinetics::MoveTypes;
+use fuzzyfold::structure::MultiPairTable;
 use fuzzyfold::input_parsers::read_eval_input;
 use fuzzyfold::energy_parsers::EnergyModelArguments;
 use fuzzyfold::kinetics::LoopNeighbors;
+use fuzzyfold::kinetics::enum_neighbors::enumerate_neighbors;
 
 
 #[derive(Debug, Args)]
@@ -55,8 +56,7 @@ pub struct LocminInput {
 
 
 #[derive(Debug, Parser)]
-#[command(name = "ff-eval")]
-#[command(author, version, about)]
+#[command(name = "ff-explore", version, about = "The structures within an energy range of a structure: a macrostate.", after_help = fuzzyfold::CITATION)]
 pub struct Cli {
     #[command(flatten)]
     pub lmin: LocminInput,
@@ -81,19 +81,21 @@ fn init_logging(verbosity: u8) {
 }
 
 fn main() -> Result<()> {
+    fuzzyfold::restore_sigpipe();
     let cli = Cli::parse();
     init_logging(cli.lmin.verbose);
-    let emodel = Arc::new(cli.energy.build_model());
+    let emodel = Arc::new(cli.energy.build_model()?);
     let is_rna = cli.energy.dna.is_none();
     let (header, sequence, structure) = read_eval_input(&cli.lmin.input, is_rna)?;
-    let pairings = PairTable::try_from(&structure)?;
+    cli.energy.warn_circular(&sequence);
+    let pairings = MultiPairTable::try_from(&structure)?;
 
     let (delta, distance, info) = match (cli.lmin.delta, cli.lmin.maxdist) {
         (Some(d), None) => {
-            ((d * 100.0) as i32, usize::MAX, format!("delta = {:<.2}", d))
+            ((d * 100.0).round() as i32, usize::MAX, format!("delta = {:<.2}", d))
         },
         (None, Some(n)) => (i32::MAX/2, n, format!("maxdist = {}", n)),
-        (Some(d), Some(n)) => ((d * 100.0) as i32, n, format!("delta = {:<.2} maxdist = {}", d, n)),
+        (Some(d), Some(n)) => ((d * 100.0).round() as i32, n, format!("delta = {:<.2} maxdist = {}", d, n)),
         _ => unreachable!("clap guarantees one is set"),
     };
 
@@ -105,50 +107,28 @@ fn main() -> Result<()> {
         println!("{}", sequence);
     }
 
-    match (cli.lmin.three_way_shifts, cli.lmin.four_way_shifts) {
-        (false, false) => {
-            let mut moves = LoopNeighbors::try_from(
-                (sequence, &pairings, emodel, NoShift)
-            ).expect("failed to build loop table");
-            do_enumerate(&mut moves, delta, distance, cli.lmin.sorted);
-        }
-        (true, false) => {
-            let mut moves = LoopNeighbors::try_from(
-                (sequence, &pairings, emodel, ThreeWayOnly)
-            ).expect("failed to build loop table");
-            do_enumerate(&mut moves, delta, distance, cli.lmin.sorted);
-        }
-        (false, true) => {
-            let mut moves = LoopNeighbors::try_from(
-                (sequence, &pairings, emodel, FourWayOnly)
-            ).expect("failed to build loop table");
-            do_enumerate(&mut moves, delta, distance, cli.lmin.sorted);
-        }
-        (true, true) => {
-            let mut moves = LoopNeighbors::try_from(
-                (sequence, &pairings, emodel, ThreeAndFour)
-            ).expect("failed to build loop table");
-            do_enumerate(&mut moves, delta, distance, cli.lmin.sorted);
-        }
-    }
+    let shifts = MoveTypes { three_way: cli.lmin.three_way_shifts, four_way: cli.lmin.four_way_shifts, a_to_i: false };
+    let mut moves = LoopNeighbors::try_from((sequence, &pairings, emodel, shifts))
+        .map_err(|e| anyhow::anyhow!("failed to build loop table: {e}"))?;
+    do_enumerate(&mut moves, delta, distance, cli.lmin.sorted);
     Ok(())
 }
 
-fn do_enumerate<E: EnergyModel, P: ShiftPolicy>(
-    moves: &mut LoopNeighbors<E, P>,
+fn do_enumerate<E: EnergyModel>(
+    moves: &mut LoopNeighbors<E>,
     delta: i32,
     distance: usize,
     sorted: bool,
 ) {
     if !sorted {
-        moves.generate_neighbors(delta, distance, 
+        enumerate_neighbors(moves, delta, distance, 
             |db, en| { 
                 println!("{} {:.2}", db, en as f64 / 100.0);
             }
         );
     } else {
         let mut neighbors = Vec::new();
-        moves.generate_neighbors(delta, distance, 
+        enumerate_neighbors(moves, delta, distance, 
             |db, en| { 
                 neighbors.push((db.clone(), en)); }
         );

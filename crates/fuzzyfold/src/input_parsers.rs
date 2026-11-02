@@ -3,9 +3,10 @@ use std::io::{stdin, BufRead, BufReader, Cursor};
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
-use paste::paste;
+use pastey::paste;
 use ff_structure::DotBracketVec;
 use ff_energy::NucleotideVec;
+use ff_energy::check_sequence;
 
 #[derive(Clone, Copy)]
 enum NAMode {
@@ -54,24 +55,20 @@ fn parse_na_format<R: BufRead>(
 
     let structure = match (structure, mode) {
         (Some(s), NAMode::Strict) => {
-            if sequence.len() != s.len() {
-                return Err(anyhow!(
-                        "Sequence length ({}) and structure length ({}) do not match",
-                        sequence.len(),
-                        s.len()
-                ));
-            }
+            check_sequence(&sequence, &s)?;
             s
         },
         (None, NAMode::Strict) => return Err(anyhow!("Missing structure line")),
 
         (Some(s), NAMode::Lenient) => {
+            // The structure of the first part of the sequence.
             if sequence.len() < s.len() {
                 return Err(anyhow!(
                         "Structure is longer than sequence ({} > {}).",
                         s.len(), sequence.len()
                 ));
             }
+            check_sequence(&sequence[..s.len()], &s)?;
             s
         },
 
@@ -139,12 +136,11 @@ pub fn read_eval<R: BufRead>(reader: R, is_rna: bool) -> Result<(Option<String>,
 /// - `base_string(&str)`
 /// - `base_file<P: AsRef<Path>>(P)`
 /// - `base_stdin()`
-/// - `base_input(&str)`  (dispatches "-" → stdin, otherwise → file)
+/// - `base_input(&str)`  ("-" is stdin, anything else a file)
 ///
-/// Example:
-/// ```ignore
-/// define_input_variants!(read_na_format, Result<(Option<String>, NucleotideVec, DotBracketVec)>);
-/// ```
+/// For example, `define_input_variants!(read_eval, NAResult)` gives
+/// `read_eval_string`, `read_eval_file`, `read_eval_stdin` and
+/// `read_eval_input`.
 macro_rules! define_input_variants {
     ($base:ident, $ret:ty) => {
         paste! {

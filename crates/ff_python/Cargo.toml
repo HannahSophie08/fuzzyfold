@@ -1,6 +1,6 @@
 [package]
 name = "ff_python"
-version = "0.1.1"
+version = "0.6.0"
 publish = false
 edition.workspace = true
 license.workspace = true
@@ -8,7 +8,7 @@ repository.workspace = true
 categories.workspace = true
 
 [lib]
-name = "fuzzyfold"
+name = "_fuzzyfold"
 crate-type = ["cdylib"]
 
 [dependencies]
@@ -16,5 +16,7 @@ ff_structure.workspace = true
 ff_energy.workspace = true
 ff_kinetics.workspace = true
 rand.workspace = true
-pyo3 = { version = "0.21", features = ["extension-module"] }
+rustc-hash.workspace = true
+pyo3 = { version = "0.30", features = ["extension-module", "abi3-py310"] }
+rayon.workspace = true
 

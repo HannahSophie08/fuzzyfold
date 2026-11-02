@@ -1,10 +1,10 @@
 [package]
 name = "ff_energy"
-version = "0.4.1"
+version = "0.6.0"
 description = "fuzzyfold's nearest neighbor free energy evaluations."
 documentation = "https://docs.rs/ff_energy"
 keywords = ["dna", "rna", "secondary-structure", "nearest-neighbor"]
-readme = "../../README.md"
+readme = "README.md"
 
 edition.workspace = true
 license.workspace = true
@@ -14,19 +14,18 @@ categories.workspace = true
 [dependencies]
 ff_structure.workspace = true
 
-colored.workspace = true
-criterion.workspace = true
-env_logger.workspace = true
-itertools.workspace = true
-rustc-hash.workspace = true
 log.workspace = true
-paste = "1.0.15"
+pastey.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
 
 [[bench]]
 name = "energy_models"
 harness = false
 
-[badges]
-maintenance = { status = "actively-developed" }
-
-
+# A workload for instruction counts (callgrind), built as an example for a
+# fixed path: target/release/examples/energy_workload
+[[example]]
+name = "energy_workload"
+path = "benches/workloads/energy_workload.rs"
