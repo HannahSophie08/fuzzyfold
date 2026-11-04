@@ -6,9 +6,7 @@ use std::fs::File;
 use clap::Parser;
 use anyhow::{bail, Result};
 
-use ff_structure::DotBracket;
-use ff_structure::DotBracketVec;
-use ff_structure::PairTable;
+use ff_structure::{DotBracketVec, MultiPairTable, MultiStruct};
 use ff_energy::NucleotideVec;
 use ff_energy::Base;
 
@@ -265,9 +263,9 @@ fn edit_count(
 ) -> Vec<Vec<usize>> {
     let mut edit_counts = vec![vec![0usize; positions.len()]; patterns.len()];
     for (db, count) in block.iter() {
-        let pt = PairTable::try_from(db).expect("invalud structure in input file");
+        let mpt = MultiPairTable::try_from(db).unwrap();
         for (k, pattern) in patterns.iter().enumerate() {
-            let result = position_check(sequence, db, &pt, positions, pattern);
+            let result = position_check(sequence, db, &mpt, positions, pattern);
             for (i, edited) in result.iter().enumerate() {
                 if *edited {
                     edit_counts[k][i] += count;
@@ -278,7 +276,7 @@ fn edit_count(
     edit_counts
 }
 
-fn position_check (sequence: &NucleotideVec, structure: &DotBracketVec, pt: &PairTable, positions: &Vec<usize>, pattern: &Pattern) -> Vec<bool> {
+fn position_check (sequence: &NucleotideVec, structure: &DotBracketVec, mpt: &MultiPairTable, positions: &Vec<usize>, pattern: &Pattern) -> Vec<bool> {
 
     let mut result = Vec::new();
 
@@ -290,12 +288,12 @@ fn position_check (sequence: &NucleotideVec, structure: &DotBracketVec, pt: &Pai
         }
         
         if !pattern.paired {
-            if structure[*position] != DotBracket::Unpaired {
+            if mpt.get(*position) != MultiStruct::Unpaired {
                 result.push(false);
                 continue;
             }
         } else {
-            if structure[*position] == DotBracket::Unpaired {
+            if mpt.get(*position) == MultiStruct::Unpaired{
                 result.push(false);
                 continue;
             }
@@ -313,21 +311,23 @@ fn position_check (sequence: &NucleotideVec, structure: &DotBracketVec, pt: &Pai
 
         let mut outer_partner = Vec::new();
         for o in outer {
-            if !pt[o].is_some() {
-                result.push(false );
-                continue 'outer_pos; 
-            } else {
-                outer_partner.push(pt[o].unwrap() as usize);
+            match mpt.get(o) {
+                MultiStruct::Paired(p) => outer_partner.push(p),
+                _ => {
+                    result.push(false);
+                    continue 'outer_pos;
+                }
             }
         } 
 
         let mut inner_partner = Vec::new();
         for i in inner {
-            if !pt[i].is_some() {
-                result.push(false );
-                continue 'outer_pos; 
-            } else {
-                inner_partner.push(pt[i].unwrap() as usize);
+            match mpt.get(i) {
+                MultiStruct::Paired(p) => inner_partner.push(p),
+                _ => {
+                    result.push(false);
+                    continue 'outer_pos;
+                }
             }
         }
         

@@ -6,8 +6,7 @@ use std::fs::{File, read_to_string};
 use clap::Parser;
 use anyhow::{bail, Result};
 
-use ff_structure::DotBracketVec;
-use ff_structure::PairList;
+use ff_structure::{DotBracketVec, MultiPairTable, MultiStruct};
 use ff_energy::NucleotideVec;
 
 #[derive(Parser)]
@@ -139,13 +138,20 @@ fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, usize>>, region
 
         for (structure, count) in length_structures.iter() {
 
-            let pl = PairList::try_from(structure)?;
+            let mpt = MultiPairTable::try_from(structure).unwrap();
             let transcript_len = structure.len();
             let (mut with_alu1, mut with_alu2, mut within, mut with_rest, mut unpaired) = (0usize, 0usize, 0usize, 0usize, 0usize);
-            for (i, j) in pl.iter() {
-                let region_i = regions.iter().position(|&(start, end) | (*i as usize) >= start && (*i as usize) <= end);
-                let region_j = regions.iter().position(|&(start, end) | (*j as usize) >= start && (*j as usize) <= end);
+
+            for i in 0..mpt.len() {
                 
+                let j = match mpt.get(i) {
+                    MultiStruct::Paired(j) if i < j => j,
+                    _ => continue,
+                };
+                
+                let region_i = regions.iter().position(|&(start, end) | i  >= start && i <= end);
+                let region_j = regions.iter().position(|&(start, end) | j >= start && j <= end);
+
                 match (region_i, region_j) {
                     (Some(a), Some(b)) if a == outlier && b == outlier => within += 2,
                     (Some(a), Some(b)) if (a == outlier && b == alu_1 || b == outlier && a == alu_1) => with_alu1 += 1,

@@ -1,14 +1,12 @@
 use rustc_hash::FxHashMap;
 use std::path::PathBuf;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader};
 use std::fs::{File};
 
 use clap::Parser;
 use anyhow::{bail, Result};
 
-use ff_structure::DotBracket;
-use ff_structure::DotBracketVec;
-use ff_structure::PairTable;
+use ff_structure::{DotBracketVec, MultiPairTable, MultiStruct};
 use ff_energy::NucleotideVec;
 use ff_energy::Base;
 
@@ -83,7 +81,7 @@ fn main() -> Result<()> {
         bail!("No positions given: use --positions or --all-adenosins");
     }
 
-    let (lengths, samples, counts) =
+    let (_lengths, _samples, counts) =
         count_per_length(&cli.input, &sequence, &positions, cli.duplex_5, cli.duplex_3)?;
 
     let mut edited_pos = vec![false; positions.len()];
@@ -223,7 +221,7 @@ fn edit_count(
 fn gets_edited (sequence: &NucleotideVec, structure: &DotBracketVec, positions: &Vec<usize>, duplex_5: usize, duplex_3: usize) -> Vec<bool> {
 
     let mut result = Vec::new();
-    let pt = PairTable::try_from(structure).unwrap();
+    let mpt = MultiPairTable::try_from(structure).unwrap();
 
     'outer_pos: for position in positions.iter() {
 
@@ -232,7 +230,7 @@ fn gets_edited (sequence: &NucleotideVec, structure: &DotBracketVec, positions: 
             continue;
         }
             
-        if structure[*position] == DotBracket::Unpaired {
+        if mpt.get(*position) == MultiStruct::Unpaired {
             result.push(false);
             continue;
         }
@@ -249,21 +247,23 @@ fn gets_edited (sequence: &NucleotideVec, structure: &DotBracketVec, positions: 
 
         let mut outer_partner = Vec::new();
         for o in outer {
-            if !pt[o].is_some() {
-                result.push(false );
-                continue 'outer_pos; 
-            } else {
-                outer_partner.push(pt[o].unwrap() as usize);
+            match mpt.get(o) {
+                MultiStruct::Paired(p) => outer_partner.push(p),
+                _ => {
+                    result.push(false);
+                    continue 'outer_pos;
+                }
             }
         } 
 
         let mut inner_partner = Vec::new();
         for i in inner {
-            if !pt[i].is_some() {
-                result.push(false );
-                continue 'outer_pos; 
-            } else {
-                inner_partner.push(pt[i].unwrap() as usize);
+            match mpt.get(i) {
+                MultiStruct::Paired(p) => inner_partner.push(p),
+                _ => {
+                    result.push(false);
+                    continue 'outer_pos;
+                }
             }
         }
         

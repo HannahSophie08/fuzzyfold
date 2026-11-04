@@ -12,23 +12,20 @@ use anyhow::Result;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
 
-use ff_structure::DotBracket;
-use ff_structure::DotBracketVec;
-use ff_structure::PairTable;
+use ff_structure::{DotBracketVec, MultiPairTable, MultiStruct};
 use ff_energy::Base;
 use ff_energy::EnergyModel;
 use ff_energy::NucleotideVec;
-use ff_kinetics::Walker;
-use ff_kinetics::LoopNeighbors;
-use ff_kinetics::shift_policy::*;
-use ff_kinetics::SSA;
-use ff_kinetics::RateModel; 
+use fuzzyfold::kinetics::Elongation;
+use fuzzyfold::kinetics::LoopNeighbors;
+use fuzzyfold::kinetics::SSA;
+use fuzzyfold::kinetics::RateModel; 
 
 use fuzzyfold::input_parsers::read_cotr_input;
 use fuzzyfold::input_parsers::read_eval_input;
 use fuzzyfold::energy_parsers::EnergyModelArguments;
 use fuzzyfold::kinetics_parsers::RateModelArguments;
-use fuzzyfold::kinetics_parsers::TimelineParameters;
+use fuzzyfold::kinetics_parsers::TimeArguments;
 
 #[derive(Parser)]
 #[command(version, about = "Stochastically simulated nucleic acid ensembles over time.")]
@@ -44,7 +41,7 @@ pub struct Cli {
     output: PathBuf,
 
     #[command(flatten, next_help_heading = "Simulation parameters")]
-    simulation: TimelineParameters,
+    simulation: TimeArguments,
 
     #[command(flatten, next_help_heading = "Energy model parameters")]
     energy: EnergyModelArguments,
@@ -63,7 +60,7 @@ pub struct Pattern {
 
 fn main() -> Result<()> {
     let mut cli = Cli::parse();
-    let emodel = Arc::new(cli.energy.build_model());
+    let emodel = Arc::new(cli.energy.build_model()?);
     let rmodel = cli.kinetics.build_model(emodel.temperature());
 
     let is_rna = cli.energy.dna.is_none();
@@ -77,9 +74,11 @@ fn main() -> Result<()> {
             }
         };
     let num_ext = sequence.len() - structure.len();
-    cli.simulation.validate(cli.kinetics.k0, num_ext)?;
-    let _t_sep = cli.simulation.t_sep.expect("t-sep must exist after validation!");
-    let pairings = PairTable::try_from(&structure)?;
+    let pairings = MultiPairTable::try_from(&structure)?;
+
+    let output = cli.simulation.output_times(num_ext)?;
+    let schedule = cli.simulation.schedule(num_ext, &output)?;
+    let _times = output.times();
 
     if let Some(h) = header {
         println!("{}", h.yellow());
@@ -89,15 +88,6 @@ fn main() -> Result<()> {
     println!("Output after {} simulations: \n - {:?}\n - {:?}\n - {:?}",
         cli.num_sims, cli.kinetics, cli.simulation, cli.energy);
 
-    let (sim_times, _t_fin) = if num_ext > 0 {
-        let t_ext = cli.simulation.t_ext.unwrap();
-        let t_end = cli.simulation.t_end;
-        let mut a = vec![t_ext; num_ext];
-        a.push(t_end);
-        (a, t_ext * (num_ext as f64) + t_end)
-    } else { 
-        (vec![cli.simulation.t_end], cli.simulation.t_end)
-    };
 
     let ac_3: Pattern = Pattern {
         name: "ac_3",
@@ -197,34 +187,9 @@ fn main() -> Result<()> {
 
     let patterns: Vec<Pattern> = vec![ac_3, ac_5, ac_7, au_3, au_5, au_7, ag_3, ag_5, ag_7, bulge_3, bulge_5, bulge_7];
 
-    let editable_times: Vec<Vec<Vec<f64>>> =
-        match (rmodel.k3ws().is_some(), rmodel.k4ws().is_some()) {
-            (false, false) => {
-                let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, NoShift))
-                    .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                    eprintln!("[moveset] selected=NoShift");
-                run_timecourse(moves, rmodel, &sim_times, cli.num_sims as u64, &sequence, &patterns).collect()
-            },
-            (true, false) => {
-                let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, ThreeWayOnly))
-                    .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                     eprintln!("[moveset] selected=ThreeWayOnly");
-                 run_timecourse(moves, rmodel, &sim_times, cli.num_sims as u64, &sequence, &patterns).collect()
-            },
-            (false, true) => {
-                let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, FourWayOnly))
-                    .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                     eprintln!("[moveset] selected=FourWayOnly");
-                 run_timecourse(moves, rmodel, &sim_times, cli.num_sims as u64, &sequence, &patterns).collect()
-            },
-            (true, true) => {
-                let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, ThreeAndFour))
-                    .map_err(|e| anyhow::anyhow!("failed to construct AddDelMoves: {:?}", e))?;
-                     eprintln!("[moveset] selected=ThreeAndFour");
-                 run_timecourse(moves, rmodel, &sim_times, cli.num_sims as u64, &sequence, &patterns).collect()
-            },
-        };
-
+    let moves = LoopNeighbors::try_from((sequence.clone(), &pairings, emodel, rmodel.move_types()))
+        .map_err(|e| anyhow::anyhow!("failed to build the move set: {e}"))?;
+    let editable_times: Vec<Vec<Vec<f64>>> = run_timecourse(moves, rmodel, &schedule, cli.num_sims as u64, &sequence, &patterns).collect();
 
     println!("{}", "Finished simulations!".red());
 
@@ -275,7 +240,7 @@ fn run_timecourse<W, K>(
     patterns: &Vec<Pattern>,
 ) -> impl ParallelIterator<Item = Vec<Vec<f64>>>
 where
-    W: Walker + Clone + Send + Sync,
+    W: Elongation + Clone + Send + Sync,
     K: RateModel + Clone + Send + Sync,
     SSA<W, K>: From<(W, K)>,
 {
@@ -305,9 +270,9 @@ where
                     sim_times,
                     |t, tinc, _, w| {
                         let current_struct = w.current_structure();
-                        let pt = PairTable::try_from(&current_struct).expect("Failed to build pair table from current structure");
+                        let mpt = MultiPairTable::try_from(&current_struct).expect("Failed to build pair table from current structure");
                         for (n, pattern) in patterns.iter().enumerate() {
-                            let editable_positions = position_check(sequence, &current_struct, &pt, &adenosines, &pattern);
+                            let editable_positions = position_check(sequence, &current_struct, &mpt, &adenosines, &pattern);
                             for (i, pos) in editable_positions.iter().enumerate() {
                                 if *pos {
                                     editable_time[n][adenosines[i]] += tinc;
@@ -326,7 +291,7 @@ where
 
 // checks whether position is unpaired and across from a 'C', and whether the 
 // 5' and 3' neighbors are paired
-fn position_check (sequence: &NucleotideVec, structure: &DotBracketVec, pt: &PairTable, positions: &Vec<usize>, pattern: &Pattern) -> Vec<bool> {
+fn position_check (sequence: &NucleotideVec, structure: &DotBracketVec, mpt: &MultiPairTable, positions: &Vec<usize>, pattern: &Pattern) -> Vec<bool> {
 
     let mut result = Vec::new();
 
@@ -338,12 +303,12 @@ fn position_check (sequence: &NucleotideVec, structure: &DotBracketVec, pt: &Pai
         }
         
         if !pattern.paired {
-            if structure[*position] != DotBracket::Unpaired {
+            if mpt.get(*position) != MultiStruct::Unpaired {
                 result.push(false);
                 continue;
             }
         } else {
-            if structure[*position] == DotBracket::Unpaired {
+            if mpt.get(*position) == MultiStruct::Unpaired {
                 result.push(false);
                 continue;
             }
@@ -361,21 +326,23 @@ fn position_check (sequence: &NucleotideVec, structure: &DotBracketVec, pt: &Pai
 
         let mut outer_partner = Vec::new();
         for o in outer {
-            if !pt[o].is_some() {
-                result.push(false );
-                continue 'outer_pos; 
-            } else {
-                outer_partner.push(pt[o].unwrap() as usize);
+             match mpt.get(o) {
+                MultiStruct::Paired(p) => outer_partner.push(p),
+                _ => {
+                    result.push(false);
+                    continue 'outer_pos;
+                }
             }
         } 
 
         let mut inner_partner = Vec::new();
         for i in inner {
-            if !pt[i].is_some() {
-                result.push(false );
-                continue 'outer_pos; 
-            } else {
-                inner_partner.push(pt[i].unwrap() as usize);
+            match mpt.get(i) {
+                MultiStruct::Paired(p) => inner_partner.push(p),
+                _ => {
+                    result.push(false);
+                    continue 'outer_pos;
+                }
             }
         }
         

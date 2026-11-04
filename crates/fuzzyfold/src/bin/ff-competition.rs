@@ -6,8 +6,7 @@ use std::fs::{File, read_to_string};
 use clap::Parser;
 use anyhow::{bail, Result};
 
-use ff_structure::DotBracketVec;
-use ff_structure::PairList;
+use ff_structure::{DotBracketVec, MultiPairTable, MultiStruct};
 use ff_energy::NucleotideVec;
 
 #[derive(Parser)]
@@ -47,6 +46,7 @@ pub enum OutlierPairs {
     Within,
     WithRest,
     Unpaired,
+    None,
 }
 
 impl OutlierPairs {
@@ -58,6 +58,7 @@ impl OutlierPairs {
             OutlierPairs::Within => "within",
             OutlierPairs::WithRest => "withrest",
             OutlierPairs::Unpaired => "unpaired",
+            OutlierPairs::None => "none",
         }
     }
 }
@@ -191,12 +192,19 @@ fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, usize>>, region
 
         for (structure, count) in timepoint_structures.iter() {
 
-            let pl = PairList::try_from(structure)?;
+            let mpt = MultiPairTable::try_from(structure).unwrap();
             let transcript_len = structure.len();
             let (mut with_alu1, mut with_alu2, mut within, mut with_rest, mut unpaired) = (0usize, 0usize, 0usize, 0usize, 0usize);
-            for (i, j) in pl.iter() {
-                let region_i = regions.iter().position(|&(start, end) | (*i as usize) >= start && (*i as usize) <= end);
-                let region_j = regions.iter().position(|&(start, end) | (*j as usize) >= start && (*j as usize) <= end);
+
+            for i in 0..mpt.len() {
+                
+                let j = match mpt.get(i) {
+                    MultiStruct::Paired(j) if i < j => j,
+                    _ => continue,
+                };
+
+                let region_i = regions.iter().position(|&(start, end) | i  >= start && i <= end);
+                let region_j = regions.iter().position(|&(start, end) | j >= start && j <= end);
                 
                 match (region_i, region_j) {
                     (Some(a), Some(b)) if a == outlier && b == outlier => within += 2,
@@ -216,9 +224,10 @@ fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, usize>>, region
                 unpaired = (out_end - out_start + 1) - (within + with_alu1 + with_alu2 + with_rest);
             }
 
+        
             // Minimum of 25% have to be paired
             // Ties: Both/Alu1/Alu2 > Within > WithRest
-            if 4* ((within + with_alu1 + with_alu2 + with_rest)) < 3* ((within + with_alu1 + with_alu2 + with_rest + unpaired)) {
+            if 4* ((within + with_alu1 + with_alu2 + with_rest)) < ((within + with_alu1 + with_alu2 + with_rest + unpaired)) {
               *counts.entry(OutlierPairs::Unpaired).or_insert(0) += *count;
             } else if within != 0 && with_alu1 == 0 && with_alu2 == 0 {
                 if within >= with_rest {
@@ -247,7 +256,7 @@ fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, usize>>, region
                 }
             }
 
-            /*
+            /* 
             // Ties: Both/Alu1/Alu2 > Within > WithRest > Unpaired
             if within != 0 && with_alu1 == 0 && with_alu2 == 0 {
                 if within >= with_rest && within >= unpaired {
@@ -306,9 +315,24 @@ fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, usize>>, region
             } else if within == 0 && with_alu1 == 0 && with_alu2 == 0 {
                 *counts.entry(OutlierPairs::None).or_insert(0) += *count;
             }
+            
+
+            // Present
+            if within != 0 && with_alu1 == 0 && with_alu2 == 0{
+                *counts.entry(OutlierPairs::Within).or_insert(0) += *count;
+            } else if with_alu1 != 0 && with_alu2 != 0 { 
+                *counts.entry(OutlierPairs::Both).or_insert(0) += *count;
+            } else if with_alu1 != 0 && with_alu2 == 0 { 
+                *counts.entry(OutlierPairs::Alu1).or_insert(0) += *count;
+            } else if with_alu1 == 0 && with_alu2 != 0 { 
+                *counts.entry(OutlierPairs::Alu2).or_insert(0) += *count;
+            } else if within == 0 && with_alu1 == 0 && with_alu2 == 0 {
+                *counts.entry(OutlierPairs::None).or_insert(0) += *count;
+            }
             */
             
         }
+    
 
         result.push(counts); 
 

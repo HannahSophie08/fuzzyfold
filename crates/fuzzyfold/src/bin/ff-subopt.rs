@@ -6,10 +6,7 @@ use std::fs::{File, read_to_string};
 use clap::Parser;
 use anyhow::{bail, Result};
 
-use ff_structure::DotBracket;
-use ff_structure::DotBracketVec;
-use ff_structure::PairTable;
-use ff_structure::PairList;
+use ff_structure::{DotBracketVec, MultiPairTable, MultiStruct};
 use ff_energy::NucleotideVec;
 use ff_energy::Base;
 
@@ -194,7 +191,7 @@ fn edit_count (sequence: &NucleotideVec, structures: &Vec<FxHashMap<DotBracketVe
 fn gets_edited (sequence: &NucleotideVec, structure: &DotBracketVec, positions: &Vec<usize>, duplex_5: usize, duplex_3: usize) -> Vec<bool> {
 
     let mut result = Vec::new();
-    let pt = PairTable::try_from(structure).unwrap();
+    let mpt = MultiPairTable::try_from(structure).unwrap();
 
     'outer_pos: for position in positions.iter() {
 
@@ -203,7 +200,7 @@ fn gets_edited (sequence: &NucleotideVec, structure: &DotBracketVec, positions: 
             continue;
         }
             
-        if structure[*position] != DotBracket::Unpaired {
+        if mpt.get(*position) == MultiStruct::Unpaired {
             result.push(false);
             continue;
         }
@@ -220,21 +217,23 @@ fn gets_edited (sequence: &NucleotideVec, structure: &DotBracketVec, positions: 
 
         let mut outer_partner = Vec::new();
         for o in outer {
-            if !pt[o].is_some() {
-                result.push(false );
-                continue 'outer_pos; 
-            } else {
-                outer_partner.push(pt[o].unwrap() as usize);
+            match mpt.get(o) {
+                MultiStruct::Paired(p) => outer_partner.push(p),
+                _ => {
+                    result.push(false);
+                    continue 'outer_pos;
+                }
             }
         } 
 
         let mut inner_partner = Vec::new();
         for i in inner {
-            if !pt[i].is_some() {
-                result.push(false );
-                continue 'outer_pos; 
-            } else {
-                inner_partner.push(pt[i].unwrap() as usize);
+            match mpt.get(i) {
+                MultiStruct::Paired(p) => inner_partner.push(p),
+                _ => {
+                    result.push(false);
+                    continue 'outer_pos;
+                }
             }
         }
         
@@ -259,7 +258,7 @@ fn gets_edited (sequence: &NucleotideVec, structure: &DotBracketVec, positions: 
         let duplex_len = duplex_5 + duplex_3;
 
         if outer_partner[duplex_5 -1] > inner_partner[duplex_3 - 1] {
-            if outer_partner[duplex_5 -1] - inner_partner[duplex_3 - 1] == duplex_len && sequence[outer_partner[0] - 1] == Base::C {
+            if outer_partner[duplex_5 -1] - inner_partner[duplex_3 - 1] == duplex_len && sequence[outer_partner[0] - 1] == Base::U {
                 result.push(true);
                 continue;
             }
@@ -302,11 +301,17 @@ fn count_categories(structures: &Vec<FxHashMap<DotBracketVec, usize>>, regions: 
 
         for (structure, count) in timepoint_structures.iter() {
 
-            let pl = PairList::try_from(structure)?;
+            let mpt = MultiPairTable::try_from(structure).unwrap();
 
-            for (i, j) in pl.iter() {
-                let region_i = regions.iter().position(|&(start, end) | (*i as usize) >= start && (*i as usize) <= end);
-                let region_j = regions.iter().position(|&(start, end) | (*j as usize) >= start && (*j as usize) <= end);
+            for i in 0..mpt.len() {
+                
+                let j = match mpt.get(i) {
+                    MultiStruct::Paired(j) if i < j => j,
+                    _ => continue,
+                };
+
+                let region_i = regions.iter().position(|&(start, end) | i  >= start && i <= end);
+                let region_j = regions.iter().position(|&(start, end) | j >= start && j <= end);
 
                 let category = match (region_i, region_j) {
                     (Some(a), Some(b)) if a == b => Category::Within(a),
