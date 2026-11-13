@@ -21,6 +21,19 @@ pub struct Cli {
     #[arg(long, value_name = "START-END", num_args = 1..)]
     regions: Vec<String>,
 
+    #[arg(long)]
+    drf: bool,
+
+    /// number of simulations per input file!
+    #[arg(long)]
+    num_sims:Option<usize>,
+
+    #[arg(long)]
+    t_ext:Option<f64>,
+
+    #[arg(long)]
+    t_end:Option<f64>,
+
     #[arg(short, long, value_name = "FILE")]
     output: PathBuf,
 }
@@ -33,13 +46,26 @@ struct FileData {
     t_end: f64,
     t_sep: f64,
     num_sims: usize,
-    structures: Vec<FxHashMap<DotBracketVec, usize>>,
-    categories: Vec<FxHashMap<Category, usize>>,
+    structures: Vec<FxHashMap<DotBracketVec, f64>>,
+    categories: Vec<FxHashMap<Category, f64>>,
 }
 
 fn main() -> Result<()> {
 
     let cli = Cli::parse();
+
+    if cli.drf && cli.num_sims.is_none() {
+        panic!("Drf input requires num_sims!")
+    }
+
+    if cli.drf && cli.t_ext.is_none() {
+        panic!("Drf input requires t_ext!")
+    }
+
+    if cli.drf && cli.t_end.is_none() {
+        panic!("Drf input requires t_end!")
+    }
+
 
     let regions: Vec<(usize, usize)> = cli.regions.iter()
     .map(|r| {
@@ -52,11 +78,18 @@ fn main() -> Result<()> {
 
     let mut data = Vec::new();
 
-    for i in cli.input.iter() {
-        let file = parse_file(i.clone())?;
-        data.push(file);
+    if !cli.drf {
+        for i in cli.input.iter() {
+            let file = parse_file(i.clone())?;
+            data.push(file);
+        }
+    } else {
+        for i in cli.input.iter() {
+            let file = parse_drf_file(i.clone(), cli.num_sims.unwrap())?;
+            data.push(file);
+        }
     }
-
+    
     if data.len() <= 1 {
         bail!("At least two files have to be given as input!")
     }
@@ -64,6 +97,8 @@ fn main() -> Result<()> {
     for file in data.iter_mut() {
         file.categories = count_categories(&file.structures, &regions)?;
     }
+
+    let data_len = data.len();
 
     let csv_path = cli.output.with_extension("csv");
     
@@ -74,23 +109,43 @@ fn main() -> Result<()> {
     for file in data_iter {
         combined_data = accumulate(combined_data, file)?;
     }
-
-    let sequence = combined_data.sequence.unwrap();
-    let co_time = combined_data.t_ext * (sequence.len() - 1) as f64;
-    let post_time = co_time + combined_data.t_end;
-   
-    let mut writer = BufWriter::new(File::create(csv_path.clone())?);
-    writeln!(writer, "# t_split={}", co_time)?;
-    writeln!(writer, "# t_ext={:?}", combined_data.t_ext)?;
-    writeln!(writer, "# t_end={}", post_time)?;
-    let regions_str = regions.iter()
-        .map(|(a, b)| format!("{}-{}", a, b))
-        .collect::<Vec<_>>()
-        .join(",");
-    writeln!(writer, "# regions={}", regions_str)?;
-    writeln!(writer, "# num_sims={}", combined_data.num_sims)?;
-    write_categories(&mut writer, &combined_data.times, &combined_data.categories)?;
-    writer.flush()?;
+     
+    if !cli.drf {
+        let sequence = combined_data.sequence.unwrap();
+        let co_time = combined_data.t_ext * (sequence.len() - 1) as f64;
+        let post_time = co_time + combined_data.t_end;
+    
+        let mut writer = BufWriter::new(File::create(csv_path.clone())?);
+        writeln!(writer, "# t_split={}", co_time)?;
+        writeln!(writer, "# t_ext={:?}", combined_data.t_ext)?;
+        writeln!(writer, "# t_end={}", post_time)?;
+        let regions_str = regions.iter()
+            .map(|(a, b)| format!("{}-{}", a, b))
+            .collect::<Vec<_>>()
+            .join(",");
+        writeln!(writer, "# regions={}", regions_str)?;
+        writeln!(writer, "# num_sims={}", combined_data.num_sims)?;
+        write_categories(&mut writer, &combined_data.times, &combined_data.categories)?;
+        writer.flush()?;
+        
+    } else {
+        
+        let mut writer = BufWriter::new(File::create(csv_path.clone())?);
+        let sequence = combined_data.sequence.unwrap();
+        let co_time = cli.t_ext.unwrap() * (sequence.len() - 1) as f64;
+        let post_time = co_time + cli.t_end.unwrap();
+        writeln!(writer, "# t_split={}", co_time)?;
+        writeln!(writer, "# t_ext={:?}", cli.t_ext.unwrap())?;
+        writeln!(writer, "# t_end={}", post_time)?;
+        let regions_str = regions.iter()
+            .map(|(a, b)| format!("{}-{}", a, b))
+            .collect::<Vec<_>>()
+            .join(",");
+        writeln!(writer, "# regions={}", regions_str)?;
+        writeln!(writer, "# num_sims={}", cli.num_sims.unwrap() * data_len)?;
+        write_categories(&mut writer, &combined_data.times, &combined_data.categories)?;
+        writer.flush()?;
+    }
 
     Ok(())
 }
@@ -138,21 +193,61 @@ fn parse_file(path: PathBuf) -> Result<FileData> {
         let t_idx = data.times.len() - 1; 
 
         let structure = DotBracketVec::try_from(cols[1])?;
-        let count: usize = cols[2].parse()?;
+        let count: f64 = cols[2].parse()?;
 
-        *data.structures[t_idx].entry(structure).or_insert(0) += count;
+        *data.structures[t_idx].entry(structure).or_insert(0.0) += count;
     }
     Ok(data)
 }
 
 
-fn count_categories(structures: &Vec<FxHashMap<DotBracketVec, usize>>, regions: &Vec<(usize, usize)>,) -> Result<Vec<FxHashMap<Category, usize>>>{
+fn parse_drf_file(path: PathBuf, num_sims: usize) -> Result<FileData> {
+
+    let content = read_to_string(path)?;
+    let mut data = FileData::default();
+
+    for line in content.lines() {
+        if line.starts_with('#') {
+            continue;
+        }
+        if line == "id time occupancy structure energy sequence" {
+            continue;
+        }
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        let t:f64 = cols[1].parse()?;
+
+        if data.times.last() != Some(&t) {
+            data.times.push(t);
+            data.structures.push(FxHashMap::default());
+        }
+
+        let t_idx = data.times.len() - 1; 
+
+        let structure = DotBracketVec::try_from(cols[3])?;
+        let occupancy: f64 = cols[2].parse()?;
+
+        let count: f64 = occupancy * num_sims as f64;
+
+        *data.structures[t_idx].entry(structure).or_insert(0.0) += count;
+
+        let seq = cols[5];
+        let longer = data.sequence.as_ref().map_or(true, |s| seq.len() > s.len());
+        if longer {
+                data.sequence = Some(NucleotideVec::try_from(seq.replace('I', "A").as_str())?);
+            }
+        }
+
+    Ok(data)
+}
+
+
+fn count_categories(structures: &Vec<FxHashMap<DotBracketVec, f64>>, regions: &Vec<(usize, usize)>,) -> Result<Vec<FxHashMap<Category, f64>>>{
 
     let mut result = Vec::with_capacity(structures.len());
    
     for timepoint_structures in structures.iter() {
 
-        let mut counts: FxHashMap<Category, usize> = FxHashMap::default();
+        let mut counts: FxHashMap<Category, f64> = FxHashMap::default();
 
         for (structure, count) in timepoint_structures.iter() {
 
@@ -176,7 +271,7 @@ fn count_categories(structures: &Vec<FxHashMap<DotBracketVec, usize>>, regions: 
                     (None, None) => continue,
                 };
 
-                *counts.entry(category).or_insert(0) += count;
+                *counts.entry(category).or_insert(0.0) += count;
             }
         }
 
@@ -231,7 +326,7 @@ fn accumulate(data1: FileData, data2: FileData) -> Result<FileData> {
 
     for (t_idx, categories) in data2.categories.into_iter().enumerate() {
         for (cat, count) in categories.into_iter() {
-            *combined_data.categories[t_idx].entry(cat).or_insert(0) += count;
+            *combined_data.categories[t_idx].entry(cat).or_insert(0.0) += count;
         }
     }
 
@@ -244,7 +339,7 @@ fn accumulate(data1: FileData, data2: FileData) -> Result<FileData> {
 fn write_categories( 
     writer: &mut impl Write,
     times: &[f64],
-    counts: &[FxHashMap<Category, usize>],
+    counts: &[FxHashMap<Category, f64>],
 ) -> Result<()> {
     writeln!(writer, "time,category,count")?;
     for (t_idx, t) in times.iter().enumerate() {

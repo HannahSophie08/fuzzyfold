@@ -22,6 +22,19 @@ pub struct Cli {
     #[arg(long)]
     outlier: usize,
 
+    #[arg(long)]
+    drf: bool,
+
+    /// number of simulations per input file!
+    #[arg(long)]
+    num_sims:Option<usize>,
+
+    #[arg(long)]
+    t_ext:Option<f64>,
+
+    #[arg(long)]
+    t_end:Option<f64>,
+
     #[arg(short, long, value_name = "FILE")]
     output: PathBuf,
 }
@@ -34,8 +47,8 @@ struct FileData {
     t_end: f64,
     t_sep: f64,
     num_sims: usize,
-    structures: Vec<FxHashMap<DotBracketVec, usize>>,
-    outlier_pairs: Vec<FxHashMap<OutlierPairs, usize>>,
+    structures: Vec<FxHashMap<DotBracketVec, f64>>,
+    outlier_pairs: Vec<FxHashMap<OutlierPairs, f64>>,
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]
@@ -67,6 +80,18 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    if cli.drf && cli.num_sims.is_none() {
+        panic!("Drf input requires num_sims!")
+    }
+
+    if cli.drf && cli.t_ext.is_none() {
+        panic!("Drf input requires t_ext!")
+    }
+
+    if cli.drf && cli.t_end.is_none() {
+        panic!("Drf input requires t_end!")
+    }
+
     let regions: Vec<(usize, usize)> = cli.regions.iter()
     .map(|r| {
         let (a, b) = r.split_once('-').expect("region must be in format START-END");
@@ -88,11 +113,20 @@ fn main() -> Result<()> {
 
     let mut data = Vec::new();
 
-    for i in cli.input.iter() {
-        let file = parse_file(i.clone())?;
-        data.push(file);
+    if !cli.drf {
+        for i in cli.input.iter() {
+            let file = parse_file(i.clone())?;
+            data.push(file);
+        }
+    } else {
+        for i in cli.input.iter() {
+            let file = parse_drf_file(i.clone(), cli.num_sims.unwrap())?;
+            data.push(file);
+        }
     }
     
+    let data_len = data.len();
+
     for file in data.iter_mut() {
         file.outlier_pairs = count_outlier_pairs(&file.structures, &regions, outlier)?;
     }
@@ -107,23 +141,43 @@ fn main() -> Result<()> {
         combined_data = accumulate(combined_data, file)?;
     }
 
-    let sequence = combined_data.sequence.unwrap();
-    let co_time = combined_data.t_ext * (sequence.len() - 1) as f64;
-    let post_time = co_time + combined_data.t_end;
-   
-    let mut writer = BufWriter::new(File::create(csv_path.clone())?);
-    writeln!(writer, "# t_split={}", co_time)?;
-    writeln!(writer, "# t_ext={:?}", combined_data.t_ext)?;
-    writeln!(writer, "# t_end={}", post_time)?;
-    let regions_str = regions.iter()
-        .map(|(a, b)| format!("{}-{}", a, b))
-        .collect::<Vec<_>>()
-        .join(",");
-    writeln!(writer, "# regions={}", regions_str)?;
-    writeln!(writer, "# num_sims={}", combined_data.num_sims)?;
-    writeln!(writer, "# outlier={}", outlier+1)?;
-    write_outlier_pairs(&mut writer, &combined_data.times, &combined_data.outlier_pairs)?;
-    writer.flush()?;
+    if !cli.drf {
+        let sequence = combined_data.sequence.unwrap();
+        let co_time = combined_data.t_ext * (sequence.len() - 1) as f64;
+        let post_time = co_time + combined_data.t_end;
+        
+        let mut writer = BufWriter::new(File::create(csv_path.clone())?);
+        writeln!(writer, "# t_split={}", co_time)?;
+        writeln!(writer, "# t_ext={:?}", combined_data.t_ext)?;
+        writeln!(writer, "# t_end={}", post_time)?;
+        let regions_str = regions.iter()
+            .map(|(a, b)| format!("{}-{}", a, b))
+            .collect::<Vec<_>>()
+            .join(",");
+        writeln!(writer, "# regions={}", regions_str)?;
+        writeln!(writer, "# num_sims={}", combined_data.num_sims)?;
+        writeln!(writer, "# outlier={}", outlier+1)?;
+        write_outlier_pairs(&mut writer, &combined_data.times, &combined_data.outlier_pairs)?;
+        writer.flush()?;
+    } else {
+        
+        let mut writer = BufWriter::new(File::create(csv_path.clone())?);
+        let sequence = combined_data.sequence.unwrap();
+        let co_time = cli.t_ext.unwrap() * (sequence.len() - 1) as f64;
+        let post_time = co_time + cli.t_end.unwrap();
+        writeln!(writer, "# t_split={}", co_time)?;
+        writeln!(writer, "# t_ext={:?}", cli.t_ext.unwrap())?;
+        writeln!(writer, "# t_end={}", post_time)?;
+        let regions_str = regions.iter()
+            .map(|(a, b)| format!("{}-{}", a, b))
+            .collect::<Vec<_>>()
+            .join(",");
+        writeln!(writer, "# regions={}", regions_str)?;
+        writeln!(writer, "# num_sims={}", cli.num_sims.unwrap() * data_len)?;
+        writeln!(writer, "# outlier={}", outlier+1)?;
+        write_outlier_pairs(&mut writer, &combined_data.times, &combined_data.outlier_pairs)?;
+        writer.flush()?;
+    }
 
     Ok(())
 }
@@ -171,15 +225,56 @@ fn parse_file(path: PathBuf) -> Result<FileData> {
         let t_idx = data.times.len() - 1; 
 
         let structure = DotBracketVec::try_from(cols[1])?;
-        let count: usize = cols[2].parse()?;
+        let count: f64 = cols[2].parse()?;
 
-        *data.structures[t_idx].entry(structure).or_insert(0) += count;
+        *data.structures[t_idx].entry(structure).or_insert(0.0) += count;
     }
     Ok(data)
 }
 
 
-fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, usize>>, regions: &Vec<(usize, usize)>, outlier: usize) -> Result<Vec<FxHashMap<OutlierPairs, usize>>>{
+
+fn parse_drf_file(path: PathBuf, num_sims: usize) -> Result<FileData> {
+
+    let content = read_to_string(path)?;
+    let mut data = FileData::default();
+
+    for line in content.lines() {
+        if line.starts_with('#') {
+            continue;
+        }
+        if line == "id time occupancy structure energy sequence" {
+            continue;
+        }
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        let t:f64 = cols[1].parse()?;
+
+        if data.times.last() != Some(&t) {
+            data.times.push(t);
+            data.structures.push(FxHashMap::default());
+        }
+
+        let t_idx = data.times.len() - 1; 
+
+        let structure = DotBracketVec::try_from(cols[3])?;
+        let occupancy: f64 = cols[2].parse()?;
+
+        let count: f64 = occupancy * num_sims as f64;
+
+        *data.structures[t_idx].entry(structure).or_insert(0.0) += count;
+
+        let seq = cols[5];
+        let longer = data.sequence.as_ref().map_or(true, |s| seq.len() > s.len());
+        if longer {
+                data.sequence = Some(NucleotideVec::try_from(seq.replace('I', "A").as_str())?);
+            }
+        }
+
+    Ok(data)
+}
+
+
+fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, f64>>, regions: &Vec<(usize, usize)>, outlier: usize) -> Result<Vec<FxHashMap<OutlierPairs, f64>>>{
 
     let mut result = Vec::with_capacity(structures.len());
 
@@ -188,7 +283,7 @@ fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, usize>>, region
 
     for timepoint_structures in structures.iter() {
 
-        let mut counts: FxHashMap<OutlierPairs, usize> = FxHashMap::default();
+        let mut counts: FxHashMap<OutlierPairs, f64> = FxHashMap::default();
 
         for (structure, count) in timepoint_structures.iter() {
 
@@ -224,112 +319,113 @@ fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, usize>>, region
                 unpaired = (out_end - out_start + 1) - (within + with_alu1 + with_alu2 + with_rest);
             }
 
-        
+            
             // Minimum of 25% have to be paired
             // Ties: Both/Alu1/Alu2 > Within > WithRest
             if 4* ((within + with_alu1 + with_alu2 + with_rest)) < ((within + with_alu1 + with_alu2 + with_rest + unpaired)) {
-              *counts.entry(OutlierPairs::Unpaired).or_insert(0) += *count;
+              *counts.entry(OutlierPairs::Unpaired).or_insert(0.0) += *count;
             } else if within != 0 && with_alu1 == 0 && with_alu2 == 0 {
                 if within >= with_rest {
-                     *counts.entry(OutlierPairs::Within).or_insert(0) += *count;
+                     *counts.entry(OutlierPairs::Within).or_insert(0.0) += *count;
                 } else if with_rest > within {
-                    *counts.entry(OutlierPairs::WithRest).or_insert(0) += *count;
+                    *counts.entry(OutlierPairs::WithRest).or_insert(0.0) += *count;
                 }
             } else if with_alu1 != 0 || with_alu2 != 0 { 
                 let alus = with_alu1 + with_alu2;
                 if alus >= within && alus >= with_rest {
                     if with_alu1 != 0 && with_alu2 != 0 {
-                        *counts.entry(OutlierPairs::Both).or_insert(0) += *count;
+                        *counts.entry(OutlierPairs::Both).or_insert(0.0) += *count;
                     } else if with_alu1 != 0 && with_alu2 == 0 {
-                        *counts.entry(OutlierPairs::Alu1).or_insert(0) += *count;
+                        *counts.entry(OutlierPairs::Alu1).or_insert(0.0) += *count;
                     } else if with_alu1 == 0 && with_alu2 != 0 {
-                        *counts.entry(OutlierPairs::Alu2).or_insert(0) += *count;
+                        *counts.entry(OutlierPairs::Alu2).or_insert(0.0) += *count;
                     } 
                 } else if within >= with_rest {
-                     *counts.entry(OutlierPairs::Within).or_insert(0) += *count;
+                     *counts.entry(OutlierPairs::Within).or_insert(0.0) += *count;
                 } else if with_rest > within {
-                    *counts.entry(OutlierPairs::WithRest).or_insert(0) += *count;
+                    *counts.entry(OutlierPairs::WithRest).or_insert(0.0) += *count;
                 }
             } else if within == 0 && with_alu1 == 0 && with_alu2 == 0 {
                 if with_rest != 0 {
-                    *counts.entry(OutlierPairs::WithRest).or_insert(0) += *count;
+                    *counts.entry(OutlierPairs::WithRest).or_insert(0.0) += *count;
                 }
             }
 
-            /* 
+            /*
             // Ties: Both/Alu1/Alu2 > Within > WithRest > Unpaired
             if within != 0 && with_alu1 == 0 && with_alu2 == 0 {
                 if within >= with_rest && within >= unpaired {
-                     *counts.entry(OutlierPairs::Within).or_insert(0) += *count;
+                     *counts.entry(OutlierPairs::Within).or_insert(0.0) += *count;
                 } else if with_rest > within && with_rest >= unpaired {
-                    *counts.entry(OutlierPairs::WithRest).or_insert(0) += *count;
+                    *counts.entry(OutlierPairs::WithRest).or_insert(0.0) += *count;
                 } else if unpaired > within && unpaired > with_rest {
-                    *counts.entry(OutlierPairs::Unpaired).or_insert(0) += *count;
+                    *counts.entry(OutlierPairs::Unpaired).or_insert(0.0) += *count;
                 }
             } else if with_alu1 != 0 || with_alu2 != 0 { 
                 let alus = with_alu1 + with_alu2;
                 if alus >= within && alus >= with_rest && alus >= unpaired {
                     if with_alu1 != 0 && with_alu2 != 0 {
-                        *counts.entry(OutlierPairs::Both).or_insert(0) += *count;
+                        *counts.entry(OutlierPairs::Both).or_insert(0.0) += *count;
                     } else if with_alu1 != 0 && with_alu2 == 0 {
-                        *counts.entry(OutlierPairs::Alu1).or_insert(0) += *count;
+                        *counts.entry(OutlierPairs::Alu1).or_insert(0.0) += *count;
                     } else if with_alu1 == 0 && with_alu2 != 0 {
-                        *counts.entry(OutlierPairs::Alu2).or_insert(0) += *count;
+                        *counts.entry(OutlierPairs::Alu2).or_insert(0.0) += *count;
                     } 
                 } else if within >= with_rest && within >= unpaired {
-                     *counts.entry(OutlierPairs::Within).or_insert(0) += *count;
+                     *counts.entry(OutlierPairs::Within).or_insert(0.0) += *count;
                 } else if with_rest > within && with_rest >= unpaired {
-                    *counts.entry(OutlierPairs::WithRest).or_insert(0) += *count;
+                    *counts.entry(OutlierPairs::WithRest).or_insert(0.0) += *count;
                 } else if unpaired > within && unpaired > with_rest {
-                    *counts.entry(OutlierPairs::Unpaired).or_insert(0) += *count;
+                    *counts.entry(OutlierPairs::Unpaired).or_insert(0.0) += *count;
                 }
             } else if within == 0 && with_alu1 == 0 && with_alu2 == 0 {
                 if with_rest >= unpaired {
-                    *counts.entry(OutlierPairs::WithRest).or_insert(0) += *count;
+                    *counts.entry(OutlierPairs::WithRest).or_insert(0.0) += *count;
                 } else if unpaired > with_rest {
-                    *counts.entry(OutlierPairs::Unpaired).or_insert(0) += *count;
+                    *counts.entry(OutlierPairs::Unpaired).or_insert(0.0) += *count;
                 }
             }
 
             
             if within != 0 && with_alu1 == 0 && with_alu2 == 0{
-                *counts.entry(OutlierPairs::Within).or_insert(0) += *count;
+                *counts.entry(OutlierPairs::Within).or_insert(0.0) += *count;
             } else if with_alu1 != 0 && with_alu2 != 0 { 
                 if within > (with_alu1 + with_alu2) {
-                    *counts.entry(OutlierPairs::Mixed).or_insert(0) += *count;
+                    *counts.entry(OutlierPairs::Mixed).or_insert(0.0) += *count;
                 } else {
-                    *counts.entry(OutlierPairs::Both).or_insert(0) += *count;
+                    *counts.entry(OutlierPairs::Both).or_insert(0.0) += *count;
                 }
             } else if with_alu1 != 0 && with_alu2 == 0 { 
                 if within > with_alu1 {
-                    *counts.entry(OutlierPairs::Mixed).or_insert(0) += *count;
+                    *counts.entry(OutlierPairs::Mixed).or_insert(0.0) += *count;
                 } else {
-                    *counts.entry(OutlierPairs::Alu1).or_insert(0) += *count;
+                    *counts.entry(OutlierPairs::Alu1).or_insert(0.0) += *count;
                 }
             } else if with_alu1 == 0 && with_alu2 != 0 { 
                 if within > with_alu2 {
-                    *counts.entry(OutlierPairs::Mixed).or_insert(0) += *count;
+                    *counts.entry(OutlierPairs::Mixed).or_insert(0.0) += *count;
                 } else {
-                    *counts.entry(OutlierPairs::Alu2).or_insert(0) += *count;
+                    *counts.entry(OutlierPairs::Alu2).or_insert(0.0) += *count;
                 }
             } else if within == 0 && with_alu1 == 0 && with_alu2 == 0 {
-                *counts.entry(OutlierPairs::None).or_insert(0) += *count;
+                *counts.entry(OutlierPairs::None).or_insert(0.0) += *count;
             }
             
-
+            
             // Present
             if within != 0 && with_alu1 == 0 && with_alu2 == 0{
-                *counts.entry(OutlierPairs::Within).or_insert(0) += *count;
+                *counts.entry(OutlierPairs::Within).or_insert(0.0) += *count;
             } else if with_alu1 != 0 && with_alu2 != 0 { 
-                *counts.entry(OutlierPairs::Both).or_insert(0) += *count;
+                *counts.entry(OutlierPairs::Both).or_insert(0.0) += *count;
             } else if with_alu1 != 0 && with_alu2 == 0 { 
-                *counts.entry(OutlierPairs::Alu1).or_insert(0) += *count;
+                *counts.entry(OutlierPairs::Alu1).or_insert(0.0) += *count;
             } else if with_alu1 == 0 && with_alu2 != 0 { 
-                *counts.entry(OutlierPairs::Alu2).or_insert(0) += *count;
+                *counts.entry(OutlierPairs::Alu2).or_insert(0.0) += *count;
             } else if within == 0 && with_alu1 == 0 && with_alu2 == 0 {
-                *counts.entry(OutlierPairs::None).or_insert(0) += *count;
+                *counts.entry(OutlierPairs::None).or_insert(0.0) += *count;
             }
             */
+
             
         }
     
@@ -385,7 +481,7 @@ fn accumulate(data1: FileData, data2: FileData) -> Result<FileData> {
 
     for (t_idx, outlier_pairs) in data2.outlier_pairs.into_iter().enumerate() {
         for (cat, count) in outlier_pairs.into_iter() {
-            *combined_data.outlier_pairs[t_idx].entry(cat).or_insert(0) += count;
+            *combined_data.outlier_pairs[t_idx].entry(cat).or_insert(0.0) += count;
         }
     }
 
@@ -398,7 +494,7 @@ fn accumulate(data1: FileData, data2: FileData) -> Result<FileData> {
 fn write_outlier_pairs( 
     writer: &mut impl Write,
     times: &[f64],
-    counts: &[FxHashMap<OutlierPairs, usize>],
+    counts: &[FxHashMap<OutlierPairs, f64>],
 ) -> Result<()> {
     writeln!(writer, "time,category,count")?;
     for (t_idx, t) in times.iter().enumerate() {

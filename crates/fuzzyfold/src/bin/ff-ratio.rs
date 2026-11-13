@@ -22,6 +22,19 @@ pub struct Cli {
     #[arg(long)]
     outlier: usize,
 
+    #[arg(long)]
+    drf: bool,
+
+    /// number of simulations per input file!
+    #[arg(long)]
+    num_sims:Option<usize>,
+
+    #[arg(long)]
+    t_ext:Option<f64>,
+
+    #[arg(long)]
+    t_end:Option<f64>,
+
     #[arg(short, long, value_name = "FILE")]
     output: PathBuf,
 }
@@ -34,8 +47,8 @@ struct FileData {
     t_end: f64,
     t_sep: f64,
     num_sims: usize,
-    structures: Vec<FxHashMap<DotBracketVec, usize>>,
-    alu_pairs: Vec<FxHashMap<AluPairs, usize>>,
+    structures: Vec<FxHashMap<DotBracketVec, f64>>,
+    alu_pairs: Vec<FxHashMap<AluPairs, f64>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -71,6 +84,18 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    if cli.drf && cli.num_sims.is_none() {
+        panic!("Drf input requires num_sims!")
+    }
+
+    if cli.drf && cli.t_ext.is_none() {
+        panic!("Drf input requires t_ext!")
+    }
+
+    if cli.drf && cli.t_end.is_none() {
+        panic!("Drf input requires t_end!")
+    }
+
     let regions: Vec<(usize, usize)> = cli.regions.iter()
     .map(|r| {
         let (a, b) = r.split_once('-').expect("region must be in format START-END");
@@ -92,11 +117,20 @@ fn main() -> Result<()> {
 
     let mut data = Vec::new();
 
-    for i in cli.input.iter() {
-        let file = parse_file(i.clone())?;
-        data.push(file);
+    if !cli.drf {
+        for i in cli.input.iter() {
+            let file = parse_file(i.clone())?;
+            data.push(file);
+        }
+    } else {
+        for i in cli.input.iter() {
+            let file = parse_drf_file(i.clone(), cli.num_sims.unwrap())?;
+            data.push(file);
+        }
     }
     
+    let data_len = data.len();
+
     for file in data.iter_mut() {
         file.alu_pairs = count_outlier_pairs(&file.structures, &regions, outlier)?;
     }
@@ -110,24 +144,44 @@ fn main() -> Result<()> {
     for file in data_iter {
         combined_data = accumulate(combined_data, file)?;
     }
-
-    let sequence = combined_data.sequence.unwrap();
-    let co_time = combined_data.t_ext * (sequence.len() - 1) as f64;
-    let post_time = co_time + combined_data.t_end;
    
-    let mut writer = BufWriter::new(File::create(csv_path.clone())?);
-    writeln!(writer, "# t_split={}", co_time)?;
-    writeln!(writer, "# t_ext={:?}", combined_data.t_ext)?;
-    writeln!(writer, "# t_end={}", post_time)?;
-    let regions_str = regions.iter()
-        .map(|(a, b)| format!("{}-{}", a, b))
-        .collect::<Vec<_>>()
-        .join(",");
-    writeln!(writer, "# regions={}", regions_str)?;
-    writeln!(writer, "# num_sims={}", combined_data.num_sims)?;
-    writeln!(writer, "# outlier={}", outlier+1)?;
-    write_alu_pairs(&mut writer, &combined_data.times, &combined_data.alu_pairs)?;
-    writer.flush()?;
+    if !cli.drf {
+        let sequence = combined_data.sequence.unwrap();
+        let co_time = combined_data.t_ext * (sequence.len() - 1) as f64;
+        let post_time = co_time + combined_data.t_end;
+        
+        let mut writer = BufWriter::new(File::create(csv_path.clone())?);
+        writeln!(writer, "# t_split={}", co_time)?;
+        writeln!(writer, "# t_ext={:?}", combined_data.t_ext)?;
+        writeln!(writer, "# t_end={}", post_time)?;
+        let regions_str = regions.iter()
+            .map(|(a, b)| format!("{}-{}", a, b))
+            .collect::<Vec<_>>()
+            .join(",");
+        writeln!(writer, "# regions={}", regions_str)?;
+        writeln!(writer, "# num_sims={}", combined_data.num_sims)?;
+        writeln!(writer, "# outlier={}", outlier+1)?;
+        write_alu_pairs(&mut writer, &combined_data.times, &combined_data.alu_pairs)?;
+        writer.flush()?;
+    } else {
+        
+        let mut writer = BufWriter::new(File::create(csv_path.clone())?);
+        let sequence = combined_data.sequence.unwrap();
+        let co_time = cli.t_ext.unwrap() * (sequence.len() - 1) as f64;
+        let post_time = co_time + cli.t_end.unwrap();
+        writeln!(writer, "# t_split={}", co_time)?;
+        writeln!(writer, "# t_ext={:?}", cli.t_ext.unwrap())?;
+        writeln!(writer, "# t_end={}", post_time)?;
+        let regions_str = regions.iter()
+            .map(|(a, b)| format!("{}-{}", a, b))
+            .collect::<Vec<_>>()
+            .join(",");
+        writeln!(writer, "# regions={}", regions_str)?;
+        writeln!(writer, "# num_sims={}", cli.num_sims.unwrap() * data_len)?;
+        writeln!(writer, "# outlier={}", outlier+1)?;
+        write_alu_pairs(&mut writer, &combined_data.times, &combined_data.alu_pairs)?;
+        writer.flush()?;
+    }
 
     Ok(())
 }
@@ -177,22 +231,63 @@ fn parse_file(path: PathBuf) -> Result<FileData> {
         let structure = DotBracketVec::try_from(cols[1])?;
         let count: usize = cols[2].parse()?;
 
-        *data.structures[t_idx].entry(structure).or_insert(0) += count;
+        *data.structures[t_idx].entry(structure).or_insert(0.0) += count as f64;
     }
     Ok(data)
 }
 
 
-fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, usize>>, regions: &Vec<(usize, usize)>, outlier: usize) -> Result<Vec<FxHashMap<AluPairs, usize>>> {
+
+fn parse_drf_file(path: PathBuf, num_sims: usize) -> Result<FileData> {
+
+    let content = read_to_string(path)?;
+    let mut data = FileData::default();
+
+    for line in content.lines() {
+        if line.starts_with('#') {
+            continue;
+        }
+        if line == "id time occupancy structure energy sequence" {
+            continue;
+        }
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        let t:f64 = cols[1].parse()?;
+
+        if data.times.last() != Some(&t) {
+            data.times.push(t);
+            data.structures.push(FxHashMap::default());
+        }
+
+        let t_idx = data.times.len() - 1; 
+
+        let structure = DotBracketVec::try_from(cols[3])?;
+        let occupancy: f64 = cols[2].parse()?;
+
+        let count: f64 = occupancy * num_sims as f64;
+
+        *data.structures[t_idx].entry(structure).or_insert(0.0) += count;
+
+        let seq = cols[5];
+        let longer = data.sequence.as_ref().map_or(true, |s| seq.len() > s.len());
+        if longer {
+                data.sequence = Some(NucleotideVec::try_from(seq.replace('I', "A").as_str())?);
+            }
+        }
+
+    Ok(data)
+}
+
+
+fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, f64>>, regions: &Vec<(usize, usize)>, outlier: usize) -> Result<Vec<FxHashMap<AluPairs, f64>>> {
 
     let mut result = Vec::with_capacity(structures.len());
 
     let others: Vec<usize> = (0..3).filter(|&r| r != outlier).collect();
     let (alu_1, alu_2) = (others[0], others[1]);
 
-    for timepoint_structures in structures.iter() {
+    for  timepoint_structures in structures.iter() {
 
-        let mut counts: FxHashMap<AluPairs, usize> = FxHashMap::default();
+        let mut counts: FxHashMap<AluPairs, f64> = FxHashMap::default();
 
         for (structure, count) in timepoint_structures.iter() {
             
@@ -228,7 +323,7 @@ fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, usize>>, region
                 unpaired = (out_end - out_start + 1) - (within + with_alu1 + with_alu2 + with_rest);
             }
         
-            if 4 * ((with_alu1 + with_alu2)) < 3 * ((within + with_alu1 + with_alu2 + with_rest + unpaired)) {
+            if 4 * ((with_alu1 + with_alu2)) < ((within + with_alu1 + with_alu2 + with_rest + unpaired)) {
               continue
             }
             
@@ -236,7 +331,7 @@ fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, usize>>, region
                 let alus = with_alu1 + with_alu2;
                 if alus >= within && alus >= with_rest {
                     let key = AluPairs { alu1: with_alu1, alu2: with_alu2 };
-                    *counts.entry(key).or_insert(0) += *count;
+                    *counts.entry(key).or_insert(0.0) += *count;
                 }
             }
         }
@@ -291,7 +386,7 @@ fn accumulate(data1: FileData, data2: FileData) -> Result<FileData> {
 
     for (t_idx, pairs) in data2.alu_pairs.into_iter().enumerate() {
         for (key, count) in pairs {
-            *combined_data.alu_pairs[t_idx].entry(key).or_insert(0) += count;
+            *combined_data.alu_pairs[t_idx].entry(key).or_insert(0.0) += count;
         }
     }
 
@@ -304,7 +399,7 @@ fn accumulate(data1: FileData, data2: FileData) -> Result<FileData> {
 fn write_alu_pairs( 
     writer: &mut impl Write,
     times: &[f64],
-    counts: &[FxHashMap<AluPairs, usize>],
+    counts: &[FxHashMap<AluPairs, f64>],
 ) -> Result<()> {
     writeln!(writer, "time,alu1,alu2,count")?;
     for (t_idx, t) in times.iter().enumerate() {

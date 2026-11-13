@@ -170,7 +170,7 @@ fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, usize>>, region
                 unpaired = (out_end - out_start + 1) - (within + with_alu1 + with_alu2 + with_rest);
             }
 
-            /*
+            
             // Minimum of 25% have to be paired
             // Ties: Both/Alu1/Alu2 > Within > WithRest
             if 4* ((within + with_alu1 + with_alu2 + with_rest)) < ((within + with_alu1 + with_alu2 + with_rest + unpaired)) {
@@ -202,7 +202,7 @@ fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, usize>>, region
                 }
             }
         
-    
+            /*
             // Ties: Both/Alu1/Alu2 > Within > WithRest > Unpaired
             if within != 0 && with_alu1 == 0 && with_alu2 == 0 {
                 if within >= with_rest && within >= unpaired {
@@ -236,7 +236,7 @@ fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, usize>>, region
                     *counts.entry(OutlierPairs::Unpaired).or_insert(0) += *count;
                 }
             }
-            */
+            
 
             
             if within != 0 && with_alu1 == 0 && with_alu2 == 0{
@@ -250,7 +250,7 @@ fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, usize>>, region
             } else if within == 0 && with_alu1 == 0 && with_alu2 == 0 {
                 *counts.entry(OutlierPairs::None).or_insert(0) += *count;
             }
-            
+            */
             
         }
 

@@ -37,6 +37,62 @@ path = "src/bin/ff-ensemble.rs"
 name = "ff-timecourse"
 path = "src/bin/ff-timecourse.rs"
 
+[[bin]]
+name = "ff-competition"
+path = "src/bin/ff-competition.rs"
+
+[[bin]]
+name = "ff-edit-rate"
+path = "src/bin/ff-edit-rate.rs"
+
+[[bin]]
+name = "ff-edit"
+path = "src/bin/ff-edit.rs"
+
+[[bin]]
+name = "ff-editing-frequency"
+path = "src/bin/ff-editing-frequency.rs"
+
+[[bin]]
+name = "ff-interactions"
+path = "src/bin/ff-interactions.rs"
+
+[[bin]]
+name = "ff-ratio"
+path = "src/bin/ff-ratio.rs"
+
+[[bin]]
+name = "ff-subopt"
+path = "src/bin/ff-subopt.rs"
+
+[[bin]]
+name = "ff-subopt-competition"
+path = "src/bin/ff-subopt-competition.rs"
+
+[[bin]]
+name = "ff-subopt-edit_rate"
+path = "src/bin/ff-subopt-edit_rate.rs"
+
+[[bin]]
+name = "ff-subopt-editing-frequency"
+path = "src/bin/ff-subopt-editing-frequency.rs"
+
+[[bin]]
+name = "ff-subopt-ratio"
+path = "src/bin/ff-subopt-ratio.rs"
+
+[[bin]]
+name = "ff-atoi-rate"
+path = "src/bin/ff-atoi-rate.rs"
+
+[[bin]]
+name = "ff-accessibility"
+path = "src/bin/ff-accessibility.rs"
+
+[[bin]]
+name = "ff-run-accessibility"
+path = "src/bin/ff-run-accessibility.rs"
+
 [dependencies]
 ff_structure.workspace = true
 ff_energy.workspace = true
@@ -53,6 +109,7 @@ rustc-hash.workspace = true
 indicatif.workspace = true
 pastey.workspace = true
 rayon.workspace = true
+csv = "1.4.0"
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

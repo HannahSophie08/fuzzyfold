@@ -175,7 +175,7 @@ fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, usize>>, region
                 unpaired = (out_end - out_start + 1) - (within + with_alu1 + with_alu2 + with_rest);
             }
         
-            if 4 * ((with_alu1 + with_alu2)) < 3 * ((within + with_alu1 + with_alu2 + with_rest + unpaired)) {
+            if 4 * ((with_alu1 + with_alu2)) < ((within + with_alu1 + with_alu2 + with_rest + unpaired)) {
               continue
             }
             
