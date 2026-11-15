@@ -273,7 +273,6 @@ fn parse_drf_file(path: PathBuf, num_sims: usize) -> Result<FileData> {
     Ok(data)
 }
 
-
 fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, f64>>, regions: &Vec<(usize, usize)>, outlier: usize) -> Result<Vec<FxHashMap<OutlierPairs, f64>>>{
 
     let mut result = Vec::with_capacity(structures.len());
@@ -319,7 +318,7 @@ fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, f64>>, regions:
                 unpaired = (out_end - out_start + 1) - (within + with_alu1 + with_alu2 + with_rest);
             }
 
-            
+            /*
             // Minimum of 25% have to be paired
             // Ties: Both/Alu1/Alu2 > Within > WithRest
             if 4* ((within + with_alu1 + with_alu2 + with_rest)) < ((within + with_alu1 + with_alu2 + with_rest + unpaired)) {
@@ -351,7 +350,7 @@ fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, f64>>, regions:
                 }
             }
 
-            /*
+            
             // Ties: Both/Alu1/Alu2 > Within > WithRest > Unpaired
             if within != 0 && with_alu1 == 0 && with_alu2 == 0 {
                 if within >= with_rest && within >= unpaired {
@@ -411,7 +410,7 @@ fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, f64>>, regions:
                 *counts.entry(OutlierPairs::None).or_insert(0.0) += *count;
             }
             
-            
+           
             // Present
             if within != 0 && with_alu1 == 0 && with_alu2 == 0{
                 *counts.entry(OutlierPairs::Within).or_insert(0.0) += *count;
@@ -425,7 +424,16 @@ fn count_outlier_pairs(structures: &Vec<FxHashMap<DotBracketVec, f64>>, regions:
                 *counts.entry(OutlierPairs::None).or_insert(0.0) += *count;
             }
             */
-
+	    // Pairs the outlier with alus?
+            if with_alu1 != 0 && with_alu2 != 0 {
+                *counts.entry(OutlierPairs::Both).or_insert(0.0) += *count;
+            } else if with_alu1 != 0 && with_alu2 == 0 {
+                *counts.entry(OutlierPairs::Alu1).or_insert(0.0) += *count;
+            } else if with_alu1 == 0 && with_alu2 != 0 {
+                *counts.entry(OutlierPairs::Alu2).or_insert(0.0) += *count;
+            } else if with_alu1 == 0 && with_alu2 == 0 {
+                *counts.entry(OutlierPairs::None).or_insert(0.0) += *count;
+            }
             
         }
     
